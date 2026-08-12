@@ -243,6 +243,11 @@ def simulate_cohort_years(
                 f"year {year_index}: harvest {harvested} exceeds the standing "
                 f"live volume {live}"
             )
+        # Solver-dust clamp: the feasibility guards above bound any overshoot
+        # to SCHEDULE_TOLERANCE, so clamping the schedule to the on-hand
+        # volumes only repairs dust (e.g. LP primal values at the boundary);
+        # the balances then stay non-negative exactly.
+        harvested = min(harvested, live)
         influx = burn_influx(live - harvested, burn_rate)
         salvageable = salvageable_volume(burned, influx)
         if salvaged > salvageable + SCHEDULE_TOLERANCE:
@@ -250,6 +255,7 @@ def simulate_cohort_years(
                 f"year {year_index}: salvage {salvaged} exceeds the available "
                 f"burned inventory {salvageable}"
             )
+        salvaged = min(salvaged, salvageable)
         next_live = live_volume_after(live, harvested, influx)
         next_burned = burned_volume_after(burned, influx, salvaged, decay_rate)
         states.append(

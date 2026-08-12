@@ -182,12 +182,19 @@ def build_principal_lp(
     aac_annual_m3: float = DEFAULT_AAC_ANNUAL_M3,
     decay_rate: float = DEFAULT_DECAY_RATE,
     burned_limit_annual_m3: float | None = None,
+    cohort_ceilings_m3: list[float] | None = None,
 ) -> PrincipalLP:
     """Build the continuous principal offer LP as a HiGHS model.
 
     Column layout: all ``offer[c, y]`` columns first (cohort-major, then
     year), followed by all ``cum_offer[c, y]`` columns in the same order, so
     column indices are deterministic functions of cohort index and year.
+
+    ``cohort_ceilings_m3`` (optional) carries one annual green-volume ceiling
+    (m3/yr) per cohort — the rolling-horizon engine passes the WS3 period-1
+    decadal harvest split uniformly over the implemented years. Each ceiling
+    adds ``horizon`` rows ``green_volume_m3[c] * offer[c,y] <= ceiling[c]``
+    that augment (never replace) the global AAC row.
     """
 
     if not cohorts:
@@ -209,6 +216,19 @@ def build_principal_lp(
             "principal_invalid_burned_limit",
             f"burned_limit_annual_m3 cannot be negative: {burned_limit_annual_m3}",
         )
+    if cohort_ceilings_m3 is not None:
+        if len(cohort_ceilings_m3) != len(cohorts):
+            raise PrincipalError(
+                "principal_invalid_cohort_ceilings",
+                f"cohort_ceilings_m3 covers {len(cohort_ceilings_m3)} cohorts but "
+                f"{len(cohorts)} were parsed",
+            )
+        for ceiling in cohort_ceilings_m3:
+            if ceiling < 0:
+                raise PrincipalError(
+                    "principal_invalid_cohort_ceilings",
+                    f"cohort ceiling cannot be negative: {ceiling}",
+                )
 
     cohort_count = len(cohorts)
     years = range(horizon)
@@ -282,6 +302,19 @@ def build_principal_lp(
             burned_volumes,
         )
 
+    # ws3_ceiling[c,y]: green_volume_m3[c] * offer[c,y] <= cohort_ceilings_m3[c]
+    if cohort_ceilings_m3 is not None:
+        for c_index, ceiling in enumerate(cohort_ceilings_m3):
+            coefficient = np.array([green_volumes[c_index]])
+            for year in years:
+                model.addRow(
+                    -highspy.kHighsInf,
+                    float(ceiling),
+                    1,
+                    np.array([column_grid[c_index, year]], dtype=np.int32),
+                    coefficient,
+                )
+
     return PrincipalLP(model=model, offer_columns=offer_columns, horizon=horizon)
 
 
@@ -292,6 +325,7 @@ def solve_principal(
     aac_annual_m3: float = DEFAULT_AAC_ANNUAL_M3,
     decay_rate: float = DEFAULT_DECAY_RATE,
     burned_limit_annual_m3: float | None = None,
+    cohort_ceilings_m3: list[float] | None = None,
     run_id: str = "principal-solve",
 ) -> PrincipalResult:
     """Build and solve the principal LP; return the typed result.
@@ -306,6 +340,7 @@ def solve_principal(
         aac_annual_m3=aac_annual_m3,
         decay_rate=decay_rate,
         burned_limit_annual_m3=burned_limit_annual_m3,
+        cohort_ceilings_m3=cohort_ceilings_m3,
     )
     solve_started = time.monotonic()
     built.model.run()

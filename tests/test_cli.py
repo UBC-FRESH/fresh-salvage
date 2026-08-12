@@ -12,7 +12,7 @@ from fresh_salvage.cli import app
 
 runner = CliRunner()
 
-STUB_COMMANDS = ("rh-run", "export")
+STUB_COMMANDS = ("export",)
 
 
 def test_cli_help() -> None:
@@ -49,7 +49,7 @@ def test_cli_stub_command_fails_with_json_diagnostic(command: str) -> None:
 
 
 def test_cli_stub_command_fails_fast_without_json() -> None:
-    result = runner.invoke(app, ["rh-run"])
+    result = runner.invoke(app, ["export"])
 
     assert result.exit_code == 1
     assert "not implemented yet" in result.stdout
@@ -80,6 +80,16 @@ def test_cli_ws3_run_missing_config_fails_with_json_diagnostic(tmp_path: Path) -
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert payload["command"] == "ws3-run"
+    assert payload["diagnostic"]
+
+
+def test_cli_rh_run_missing_config_fails_with_json_diagnostic(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["rh-run", str(tmp_path / "missing.yaml"), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["command"] == "rh-run"
     assert payload["diagnostic"]
 
 

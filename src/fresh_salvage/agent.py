@@ -517,7 +517,10 @@ def solve_agent(
             if year > 0
             else 1.0
         )
-        influx = fire.burn_influx(live_before - harvest, cohort.burn_rate)
+        # Reporting-only recomputation: the LP rows enforce the dynamics, and
+        # parsed fractions are dust-snapped to [0, 1], so the exposed volume
+        # can only undershoot zero by solver dust.
+        influx = fire.burn_influx(max(0.0, live_before - harvest), cohort.burn_rate)
         volume = cohort.standing_volume_m3
         harvest_m3[year] += harvest * volume
         salvage_m3[year] += salvage * volume

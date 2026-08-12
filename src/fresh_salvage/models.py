@@ -783,6 +783,226 @@ class WS3Result(BaseModel):
         }
 
 
+class RHRunConfig(BaseModel):
+    """Configuration for one rolling-horizon coupled WS3/principal/agent run.
+
+    ``horizon`` WS3 periods (of ``period_length`` years each) are solved per
+    step, but only the first period (``period_length`` years) is implemented;
+    ``steps`` counts the implemented rolling-horizon steps. The principal and
+    agent LPs run at 1-year timesteps over the implemented window
+    (``horizon = period_length`` on their side). ``decay_rate`` is the annual
+    retention of unsalvaged burned volume and ``discount_rate`` drives the
+    agent NPV divisor; both default to the standalone principal/agent values.
+    """
+
+    run_id: str = "tsa29-rh"
+    stands_path: Path
+    yields_path: Path
+    bridge_path: Path
+    base_year: int = 2025
+    horizon: int = 15
+    period_length: int = 10
+    steps: int = 10
+    max_age: int = 999
+    workers: int = 64
+    age_smashing: AgeSmashing = Field(default_factory=AgeSmashing)
+    objective: WS3Objective = Field(default_factory=WS3Objective)
+    aac_annual_m3: float = 2_937_509
+    decay_rate: float = 0.85
+    discount_rate: float = 0.03
+    burned_limit_annual_m3: float | None = None
+    output_root: Path
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("run_id")
+    @classmethod
+    def _validate_run_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("run_id must not be empty")
+        return text
+
+    @field_validator("base_year", "horizon", "period_length", "steps", "workers")
+    @classmethod
+    def _validate_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(
+                "base_year, horizon, period_length, steps, and workers must be positive"
+            )
+        return value
+
+    @field_validator("aac_annual_m3")
+    @classmethod
+    def _validate_aac(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("aac_annual_m3 cannot be negative")
+        return value
+
+    @field_validator("decay_rate")
+    @classmethod
+    def _validate_decay_rate(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("decay_rate must lie in [0, 1]")
+        return value
+
+    @field_validator("discount_rate")
+    @classmethod
+    def _validate_discount_rate(cls, value: float) -> float:
+        if value < 0.0:
+            raise ValueError("discount_rate cannot be negative")
+        return value
+
+    @field_validator("burned_limit_annual_m3")
+    @classmethod
+    def _validate_burned_limit(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("burned_limit_annual_m3 cannot be negative")
+        return value
+
+    def write_json(self, path: Path) -> Path:
+        """Write this config as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read(cls, path: Path) -> RHRunConfig:
+        """Read a rolling-horizon run config from JSON or YAML."""
+
+        path = Path(path)
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return cls.model_validate(_load_yaml(text))
+        return cls.model_validate_json(text)
+
+
+class RHStepRecord(BaseModel):
+    """Typed record of one implemented rolling-horizon step (one JSONL line)."""
+
+    step: int = Field(ge=1)
+    start_year: int
+    ws3_status: str
+    ws3_objective_value: float
+    ws3_build_seconds: float = Field(ge=0.0)
+    ws3_solve_seconds: float = Field(ge=0.0)
+    principal_objective_value: float
+    principal_solve_seconds: float = Field(ge=0.0)
+    agent_objective_value: float
+    agent_solve_seconds: float = Field(ge=0.0)
+    annual_green_harvest_m3: list[float] = Field(default_factory=list)
+    annual_burned_harvest_m3: list[float] = Field(default_factory=list)
+    area_burned_ha: float = Field(ge=0.0)
+    wall_seconds: float = Field(ge=0.0)
+
+
+class RHManifest(BaseModel):
+    """Evidence manifest for one rolling-horizon coupled run."""
+
+    manifest_version: str = MANIFEST_VERSION
+    run_id: str
+    stands_path: Path
+    yields_path: Path
+    bridge_path: Path
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    status: str
+    steps: int = Field(ge=1)
+    horizon: int = Field(ge=1)
+    period_length: int = Field(ge=1)
+    cohorts: int = Field(ge=0)
+    total_green_harvest_m3: float = Field(ge=0.0)
+    total_burned_harvest_m3: float = Field(ge=0.0)
+    total_area_burned_ha: float = Field(ge=0.0)
+    wall_seconds: float = Field(ge=0.0)
+    source_sha256: dict[str, str] = Field(default_factory=dict)
+    step_records: list[RHStepRecord] = Field(default_factory=list)
+    config: dict[str, object] = Field(default_factory=dict)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def write_json(self, path: Path) -> Path:
+        """Write this manifest as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read_json(cls, path: Path) -> RHManifest:
+        """Read a run manifest from JSON."""
+
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+class RHResult(BaseModel):
+    """Typed result of one rolling-horizon coupled run."""
+
+    run_id: str
+    status: str
+    steps: int = Field(ge=1)
+    horizon: int = Field(ge=1)
+    period_length: int = Field(ge=1)
+    cohorts: int = Field(ge=0)
+    step_records: list[RHStepRecord] = Field(default_factory=list)
+    decadal_green_harvest_m3: list[float] = Field(default_factory=list)
+    decadal_burned_harvest_m3: list[float] = Field(default_factory=list)
+    decadal_area_burned_ha: list[float] = Field(default_factory=list)
+    final_age_distribution_ha: dict[str, float] = Field(default_factory=dict)
+    wall_seconds: float = Field(ge=0.0)
+    steps_path: Path | None = None
+    final_state_path: Path | None = None
+    manifest_path: Path | None = None
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def summary(self) -> dict[str, object]:
+        """Return a deterministic, JSON-friendly run summary."""
+
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "steps": self.steps,
+            "horizon": self.horizon,
+            "period_length": self.period_length,
+            "cohorts": self.cohorts,
+            "wall_seconds": round(self.wall_seconds, 3),
+            "decadal_green_harvest_m3": [
+                round(volume, 2) for volume in self.decadal_green_harvest_m3
+            ],
+            "decadal_burned_harvest_m3": [
+                round(volume, 2) for volume in self.decadal_burned_harvest_m3
+            ],
+            "decadal_area_burned_ha": [
+                round(area, 2) for area in self.decadal_area_burned_ha
+            ],
+            "final_age_distribution_ha": {
+                age: round(area, 2)
+                for age, area in sorted(
+                    self.final_age_distribution_ha.items(), key=lambda item: int(item[0])
+                )
+            },
+            "per_step": [
+                {
+                    "step": record.step,
+                    "ws3_objective_value": round(record.ws3_objective_value, 2),
+                    "principal_objective_value": round(
+                        record.principal_objective_value, 2
+                    ),
+                    "agent_objective_value": round(record.agent_objective_value, 2),
+                    "wall_seconds": round(record.wall_seconds, 3),
+                }
+                for record in self.step_records
+            ],
+            "artifacts": {
+                "steps": str(self.steps_path),
+                "final_state": str(self.final_state_path),
+                "manifest": str(self.manifest_path),
+            },
+            "diagnostics": [diagnostic.model_dump() for diagnostic in self.diagnostics],
+        }
+
+
 def safe_slug(value: str) -> str:
     """Return a filesystem-safe identifier slug."""
 
@@ -820,6 +1040,10 @@ __all__ = [
     "PrincipalResult",
     "PrincipalRunConfig",
     "PrincipalYearVolumes",
+    "RHManifest",
+    "RHResult",
+    "RHRunConfig",
+    "RHStepRecord",
     "ScenarioInputs",
     "ScenarioRunConfig",
     "Stand",

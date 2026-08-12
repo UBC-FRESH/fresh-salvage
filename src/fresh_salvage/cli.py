@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fresh_salvage import __version__, agent, data, principal, ws3
+from fresh_salvage import __version__, agent, data, principal, rh, ws3
 from fresh_salvage.models import (
     AgentResult,
     AgentRunConfig,
@@ -16,6 +16,8 @@ from fresh_salvage.models import (
     IngestResult,
     PrincipalResult,
     PrincipalRunConfig,
+    RHResult,
+    RHRunConfig,
     ScenarioRunConfig,
     WS3Result,
 )
@@ -179,13 +181,32 @@ def agent_run(
 
 @app.command(name="rh-run")
 def rh_run(
+    config_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a rolling-horizon run YAML or JSON config."),
+    ],
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit deterministic JSON output."),
     ] = False,
 ) -> None:
     """Run the rolling-horizon principal-agent coordination loop."""
-    _stub_exit("rh-run", json_output)
+    try:
+        config = RHRunConfig.read(config_path)
+        result = rh.run_rh(config)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code=getattr(exc, "code", "rh_run_failed"),
+            message=str(exc),
+            context={
+                "config_path": str(config_path),
+                "exception_type": type(exc).__name__,
+            },
+        )
+        _print_failure(diagnostic, json_output, command="rh-run")
+        raise typer.Exit(code=1)
+    _print_rh_summary(result, json_output)
 
 
 @app.command()
@@ -347,6 +368,52 @@ def _print_agent_summary(result: AgentResult, json_output: bool) -> None:
     console.print("Artifacts:")
     console.print(f"  {result.data_path}")
     console.print(f"  {result.csv_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_rh_summary(result: RHResult, json_output: bool) -> None:
+    """Print the rolling-horizon summary as JSON or a Rich report."""
+
+    if json_output:
+        payload = {"ok": True, "command": "rh-run", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(f"[bold green]Rolling-horizon run complete:[/bold green] {result.run_id}")
+    console.print(f"  Status: {result.status}")
+    console.print(
+        f"  Steps: {result.steps} x {result.period_length} years implemented; "
+        f"each step solves {result.horizon} WS3 periods"
+    )
+    console.print(f"  Cohorts at end: {result.cohorts:,}")
+    console.print(f"  Wall time: {result.wall_seconds:.1f} s")
+
+    step_table = Table(title="Harvest and burn per implemented decade")
+    step_table.add_column("Step")
+    step_table.add_column("Start year")
+    step_table.add_column("Green (M m3)", justify="right")
+    step_table.add_column("Burned salvage (M m3)", justify="right")
+    step_table.add_column("Area burned (kha)", justify="right")
+    step_table.add_column("Wall (s)", justify="right")
+    for index, record in enumerate(result.step_records):
+        step_table.add_row(
+            str(record.step),
+            str(record.start_year),
+            f"{result.decadal_green_harvest_m3[index] / 1e6:.2f}",
+            f"{result.decadal_burned_harvest_m3[index] / 1e6:.2f}",
+            f"{result.decadal_area_burned_ha[index] / 1e3:.1f}",
+            f"{record.wall_seconds:.1f}",
+        )
+    console.print(step_table)
+
+    for diagnostic in result.diagnostics:
+        console.print(
+            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
+        )
+
+    console.print("Artifacts:")
+    console.print(f"  {result.steps_path}")
+    console.print(f"  {result.final_state_path}")
     console.print(f"  {result.manifest_path}")
 
 
