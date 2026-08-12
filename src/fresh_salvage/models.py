@@ -291,6 +291,182 @@ class WS3Manifest(BaseModel):
         return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
 
+class PrincipalRunConfig(BaseModel):
+    """Configuration for one principal-LP solve at cohort granularity.
+
+    Inputs are the Phase 2a stands table (parquet written by ``ingest``), the
+    derived WS3 bridge ARE section (cohort units), and the femic stage-1
+    yields table (volume per hectare by curve and age). Years are 1-year
+    timesteps; ``horizon`` counts them (10 = one rolling-horizon step).
+    """
+
+    run_id: str = "tsa29-principal"
+    stands_path: Path
+    are_path: Path
+    yields_path: Path
+    horizon: int = 10
+    aac_annual_m3: float = 2_937_509
+    burned_limit_annual_m3: float | None = None
+    decay_rate: float = 0.85
+    output_root: Path
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("run_id")
+    @classmethod
+    def _validate_run_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("run_id must not be empty")
+        return text
+
+    @field_validator("horizon")
+    @classmethod
+    def _validate_horizon(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("horizon must be a positive number of 1-year timesteps")
+        return value
+
+    @field_validator("aac_annual_m3")
+    @classmethod
+    def _validate_aac(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("aac_annual_m3 cannot be negative")
+        return value
+
+    @field_validator("burned_limit_annual_m3")
+    @classmethod
+    def _validate_burned_limit(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("burned_limit_annual_m3 cannot be negative")
+        return value
+
+    @field_validator("decay_rate")
+    @classmethod
+    def _validate_decay_rate(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("decay_rate must lie in [0, 1]")
+        return value
+
+    def write_json(self, path: Path) -> Path:
+        """Write this config as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read(cls, path: Path) -> PrincipalRunConfig:
+        """Read a principal run config from JSON or YAML."""
+
+        path = Path(path)
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return cls.model_validate(_load_yaml(text))
+        return cls.model_validate_json(text)
+
+
+class PrincipalOfferRecord(BaseModel):
+    """One (cohort, year) principal offer fraction, emitted including zeros."""
+
+    cohort_id: str
+    year: int = Field(ge=1)
+    offer_fraction: float = Field(ge=0.0, le=1.0)
+
+
+class PrincipalYearVolumes(BaseModel):
+    """Offered green and burned volume (m3) of one timestep."""
+
+    year: int = Field(ge=1)
+    green_volume_m3: float = Field(ge=0.0)
+    burned_volume_m3: float = Field(ge=0.0)
+
+
+class PrincipalManifest(BaseModel):
+    """Evidence manifest for one principal-LP solve."""
+
+    manifest_version: str = MANIFEST_VERSION
+    run_id: str
+    stands_path: Path
+    are_path: Path
+    yields_path: Path
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    status: str
+    horizon: int = Field(ge=1)
+    cohorts: int = Field(ge=0)
+    objective_value: float
+    offered_cohort_years: int = Field(ge=0)
+    lp_rows: int = Field(default=0, ge=0)
+    lp_columns: int = Field(default=0, ge=0)
+    solve_seconds: float = Field(ge=0.0)
+    source_sha256: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, object] = Field(default_factory=dict)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def write_json(self, path: Path) -> Path:
+        """Write this manifest as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read_json(cls, path: Path) -> PrincipalManifest:
+        """Read a run manifest from JSON."""
+
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+class PrincipalResult(BaseModel):
+    """Typed result of one principal-LP solve."""
+
+    run_id: str
+    status: str
+    horizon: int = Field(ge=1)
+    cohorts: int = Field(ge=0)
+    objective_value: float
+    offers: list[PrincipalOfferRecord] = Field(default_factory=list)
+    per_year_volumes: list[PrincipalYearVolumes] = Field(default_factory=list)
+    offered_cohort_years: int = Field(ge=0)
+    lp_rows: int = Field(default=0, ge=0)
+    lp_columns: int = Field(default=0, ge=0)
+    solve_seconds: float = Field(ge=0.0)
+    data_path: Path | None = None
+    csv_path: Path | None = None
+    manifest_path: Path | None = None
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def summary(self) -> dict[str, object]:
+        """Return a deterministic, JSON-friendly run summary."""
+
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "horizon": self.horizon,
+            "cohorts": self.cohorts,
+            "objective_value": round(self.objective_value, 2),
+            "offered_cohort_years": self.offered_cohort_years,
+            "per_year_volumes_m3": {
+                str(volumes.year): {
+                    "green": round(volumes.green_volume_m3, 2),
+                    "burned": round(volumes.burned_volume_m3, 2),
+                }
+                for volumes in self.per_year_volumes
+            },
+            "lp_rows": self.lp_rows,
+            "lp_columns": self.lp_columns,
+            "solve_seconds": round(self.solve_seconds, 3),
+            "artifacts": {
+                "data": str(self.data_path),
+                "csv": str(self.csv_path),
+                "manifest": str(self.manifest_path),
+            },
+            "diagnostics": [diagnostic.model_dump() for diagnostic in self.diagnostics],
+        }
+
+
 class IngestManifest(BaseModel):
     """Evidence manifest for one ingestion run."""
 
@@ -446,6 +622,11 @@ __all__ = [
     "IngestManifest",
     "IngestResult",
     "MANIFEST_VERSION",
+    "PrincipalManifest",
+    "PrincipalOfferRecord",
+    "PrincipalResult",
+    "PrincipalRunConfig",
+    "PrincipalYearVolumes",
     "ScenarioInputs",
     "ScenarioRunConfig",
     "Stand",

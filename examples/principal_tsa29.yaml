@@ -1,0 +1,24 @@
+# Local example principal-LP run config for the full TSA29.
+#
+# The paths below are machine-relative outputs of the earlier phases: the
+# Phase 2a stands table (fresh-salvage ingest) and the derived WS3 bridge
+# staging of a ws3-run (ARE cohort section + femic stage-1 yields). Inputs
+# are never vendored in this repository; replace the paths with your own run
+# outputs before solving.
+#
+# Production profile (horizon 10 = one rolling-horizon step):
+#   fresh-salvage principal-run examples/principal_tsa29.yaml
+#
+# Dev-mode timing profile: set horizon to 15 and re-run; the full-TSA solve
+# (1,608 cohorts) should finish well under 60 seconds.
+run_id: tsa29-principal
+stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
+are_path: outputs/ws3_full_tsa/derived/ws3_bridge_no_lu/femic_tsa_ws3.are
+yields_path: outputs/ws3_full_tsa/derived/woodstock_no_lu_smashed/woodstock_yields.csv
+horizon: 10
+aac_annual_m3: 2937509
+burned_limit_annual_m3: null
+decay_rate: 0.85
+output_root: outputs/principal_full_tsa
+metadata:
+  description: Full-TSA29 principal offer LP with the 2,937,509 m3/yr green-volume AAC ceiling.

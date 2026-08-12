@@ -8,8 +8,15 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fresh_salvage import __version__, data, ws3
-from fresh_salvage.models import Diagnostic, IngestResult, ScenarioRunConfig, WS3Result
+from fresh_salvage import __version__, data, principal, ws3
+from fresh_salvage.models import (
+    Diagnostic,
+    IngestResult,
+    PrincipalResult,
+    PrincipalRunConfig,
+    ScenarioRunConfig,
+    WS3Result,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -106,6 +113,36 @@ def ws3_run(
         _print_failure(diagnostic, json_output, command="ws3-run")
         raise typer.Exit(code=1)
     _print_ws3_summary(result, json_output)
+
+
+@app.command(name="principal-run")
+def principal_run(
+    config_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a principal run YAML or JSON config."),
+    ],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON output."),
+    ] = False,
+) -> None:
+    """Build and solve the principal offer LP over the bridge cohorts."""
+    try:
+        config = PrincipalRunConfig.read(config_path)
+        result = principal.run_principal(config)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code=getattr(exc, "code", "principal_run_failed"),
+            message=str(exc),
+            context={
+                "config_path": str(config_path),
+                "exception_type": type(exc).__name__,
+            },
+        )
+        _print_failure(diagnostic, json_output, command="principal-run")
+        raise typer.Exit(code=1)
+    _print_principal_summary(result, json_output)
 
 
 @app.command(name="solve-principal")
@@ -209,6 +246,46 @@ def _print_ws3_summary(result: WS3Result, json_output: bool) -> None:
         volume_per_year = volume / result.period_length / 1e6
         period_table.add_row(period, f"{volume_per_year:.2f}", f"{area:,.0f}")
     console.print(period_table)
+
+    for diagnostic in result.diagnostics:
+        console.print(
+            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
+        )
+
+    console.print("Artifacts:")
+    console.print(f"  {result.data_path}")
+    console.print(f"  {result.csv_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_principal_summary(result: PrincipalResult, json_output: bool) -> None:
+    """Print the principal solve summary as JSON or a Rich report."""
+
+    if json_output:
+        payload = {"ok": True, "command": "principal-run", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(f"[bold green]Principal solve complete:[/bold green] {result.run_id}")
+    console.print(f"  Status: {result.status}")
+    console.print(f"  Cohorts: {result.cohorts:,}")
+    console.print(f"  Horizon: {result.horizon} years")
+    console.print(f"  LP size: {result.lp_rows:,} rows x {result.lp_columns:,} columns")
+    console.print(f"  Objective value: {result.objective_value:,.0f}")
+    console.print(f"  Offered cohort-years: {result.offered_cohort_years:,}")
+    console.print(f"  Solve time: {result.solve_seconds:.1f} s")
+
+    year_table = Table(title="Offered volume per year")
+    year_table.add_column("Year")
+    year_table.add_column("Green (m3)", justify="right")
+    year_table.add_column("Burned (m3)", justify="right")
+    for volumes in result.per_year_volumes:
+        year_table.add_row(
+            str(volumes.year),
+            f"{volumes.green_volume_m3:,.0f}",
+            f"{volumes.burned_volume_m3:,.0f}",
+        )
+    console.print(year_table)
 
     for diagnostic in result.diagnostics:
         console.print(
