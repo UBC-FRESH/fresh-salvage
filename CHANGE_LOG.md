@@ -1,0 +1,25 @@
+# Change Log
+
+Newest entries last. Keep this file synchronized with roadmap phase/task
+completion and GitHub issue comments.
+
+## 2026-08-12
+
+- Created the Phase 0 bootstrap lane for `masc-yunhao-xu-linear` on
+  `feature/p0-skeleton-scaffold`.
+- Began scaffolding the clean-reboot linear implementation of the TSA29
+  principal-agent salvage-subsidy pipeline as a package-backed UBC-FRESH
+  project with pure-HiGHS linear programming as the solver direction.
+- Added strict FRESH governance docs, roadmap, changelog, release notes,
+  planning refactor contract, contribution and public-repo hygiene files, a
+  minimal `masc_yunhao_xu_linear` package with a Typer CLI and stub commands,
+  module stubs for later phases, Sphinx RTD-theme docs, and
+  CI/docs/release-artifact workflows.
+- Recorded the refactor contract in `planning/phase0-refactor-contract.md`,
+  covering the migration from the predecessor Gurobi models
+  (`P_RH_Version.py`, `A_RH_Version.py`, binary `Version 2.py` and
+  `Version3.3.py`) to continuous linear HiGHS LPs, the drop of the 11-LU
+  subset in favour of the full TSA, the annual fire simulation with DT-wise
+  burn rate `1/MFRI`, and the predecessor data sources.
+- Verified Phase 0 locally with editable install, `ruff check`, `pytest`, and
+  `masc-yunhao-xu-linear --help`.

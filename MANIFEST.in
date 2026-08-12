@@ -1,0 +1,5 @@
+include README.md
+include LICENSE
+include CHANGE_LOG.md
+include RELEASE_NOTES.md
+recursive-include examples *.yaml
