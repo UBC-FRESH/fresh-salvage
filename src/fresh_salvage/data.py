@@ -168,6 +168,7 @@ BURNED_STUMPAGE_RATE = 0.25
 GREEN_HARVEST_COST = 45.0
 # Burned premiums are +25% over green for the mild, recently-killed case
 # (prompt year-1-3 salvage): 45 x 1.25 = 56.25 -> 56; 30 x 1.25 = 37.5 -> 38.
+# Convention: burned premiums are rounded to the nearest dollar.
 BURNED_HARVEST_COST = 56.0
 TRANSPORT_COST_PER_M3 = 30.0
 BURNED_TRANSPORT_COST_PER_M3 = 38.0

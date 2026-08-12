@@ -17,25 +17,35 @@ should not re-implement WS3, FHOPS, or other domain packages.
 
 ## Current Repo State
 
-This repository has completed the Phase 0 bootstrap scaffold. It contains:
+This repository has completed Phases 0-5 and Phase 6.1 (validation and
+economic calibration); Phase 6.2 (documentation suite and release notes)
+closes Phase 6. It contains:
 
 - `README.md`: concise public overview and current status.
 - `ROADMAP.md`: phase/task roadmap and issue tracker map.
-- `CHANGE_LOG.md`: append-only project narrative.
-- `planning/`: focused design notes and research records.
+- `CHANGE_LOG.md`: append-only project narrative (reverse-chronological).
+- `RELEASE_NOTES.md`: release history (`0.1.0a1`).
+- `planning/`: focused design notes and research records (refactor
+  contract, validation report, economics calibration).
 - `pyproject.toml`: package metadata and optional dependency groups.
-- `src/fresh_salvage/`: importable package code with CLI stubs and
-  module placeholders.
-- `tests/`: package-backed tests for package metadata and CLI behavior.
-- `docs/`: Sphinx documentation skeleton.
-- `examples/`: public-safe example fixtures for later phases.
+- `src/fresh_salvage/`: the implemented pipeline — `data` (full-TSA
+  ingestion), `ws3` (no-LU bridge rebuild and schedule solve), `principal`
+  and `agent` (continuous HiGHS LPs), `fire` (MFRI fire dynamics), `rh`
+  (rolling-horizon engine), `ensemble` (scenario-grid driver), and the
+  wired `fresh-salvage` CLI.
+- `tests/`: 198 package-backed tests across all layers.
+- `docs/`: Sphinx documentation (quickstart, model semantics, CLI
+  reference, architecture, development).
+- `examples/`: public-safe example configs for every command.
 - `.github/workflows/`: CI, docs, and release-artifact checks.
 - `tmp/`: ignored local working area for notes, experiments, and generated
   artifacts.
 
-Do not claim that the package implements data ingestion, WS3 integration,
-principal/agent LPs, fire simulation, rolling-horizon coordination, or export
-until the relevant roadmap phase records that evidence.
+The implemented commands are `ingest`, `ws3-run`, `principal-run`,
+`agent-run`, `rh-run`, and `ensemble-run`. The `export` command remains a
+reserved stub that fails fast with a not-implemented diagnostic; do not
+claim export behavior until the relevant roadmap phase records that
+evidence.
 
 ## Workflow Specs And Generated Outputs
 

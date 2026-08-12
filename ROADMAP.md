@@ -10,11 +10,11 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | --- | --- | --- | --- |
 | P0 Skeleton scaffold | TBD | `feature/p0-skeleton-scaffold` | Complete |
 | P1 Data ingestion and typed input records | TBD | `feature/p1-data-ingestion` | Complete |
-| P2 Full-TSA WS3 schedule integration | TBD | `feature/p2-ws3-integration` | Active (10-period gate open) |
-| P3 Principal-side linear HiGHS LP | TBD | `feature/p3-principal-lp` | Planned |
-| P4 Agent-side linear HiGHS LP and annual fire simulation | TBD | `feature/p4-agent-fire` | Planned |
-| P5 Rolling-horizon coordination loop | TBD | `feature/p5-rolling-horizon` | Planned |
-| P6 Validation against predecessor Gurobi results | TBD | `feature/p6-validation` | Planned |
+| P2 Full-TSA WS3 schedule integration | TBD | `feature/p2-ws3-integration` | Complete |
+| P3 Principal-side linear HiGHS LP | TBD | `feature/p3-principal-lp` | Complete |
+| P4 Agent-side linear HiGHS LP and annual fire simulation | TBD | `feature/p4-agent-fire` | Complete |
+| P5 Rolling-horizon coordination loop and ensemble driver | TBD | `feature/p5-rolling-horizon` | Complete |
+| P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -48,12 +48,8 @@ minimal importable Python package, and stub CLI commands.
   - [x] Run local acceptance commands.
   - [x] Commit and push to `main`.
 
-Phase 0 local verification passed with:
-
-- `python -m pip install -e .[dev]`
-- `python -m ruff check .`
-- `python -m pytest`
-- `fresh-salvage --help`
+Evidence: `65f1238` (initial scaffold), `a44ce82` (rename to
+`fresh-salvage`).
 
 ## Phase 1: Data Ingestion And Typed Input Records
 
@@ -73,11 +69,9 @@ without re-validation.
 - [x] P1.4 Add synthetic public-safe fixtures and tests.
 - [x] P1.5 Docs, roadmap, changelog, and verification closeout.
 
-Acceptance boundary:
-
-- May parse and validate predecessor-format inputs into typed records.
-- Must not vendor predecessor data files.
-- Must not implement LP or simulation logic.
+Evidence: `752075c`. The full-TSA ingestion retains 246,957 stands across
+all 12 BEC zones (no landscape-unit subset filter); manifests record the
+source SHA-256 and the effective severity/economic parameters.
 
 ## Phase 2: Full-TSA WS3 Schedule Integration
 
@@ -85,7 +79,7 @@ Parent issue: TBD
 
 Branch: `feature/p2-ws3-integration`
 
-Status: active (10-period gate open)
+Status: complete
 
 Goal: replace the predecessor 11-landscape-unit subset with the full TSA29 WS3
 bridge, compiling schedule records for every development type and period.
@@ -94,14 +88,19 @@ bridge, compiling schedule records for every development type and period.
 - [x] P2.2 Provide deterministic provenance for bridge inputs.
 - [x] P2.3 Wire the `ws3-run` CLI command to the WS3 API.
 - [x] P2.4 Add tests and docs.
-- [ ] P2.5 Verification and closeout (10-period run exceeded the 10-minute
-      gate; awaiting decision).
+- [x] P2.5 Verification and closeout.
 
-Acceptance boundary:
+Evidence: `11c1f1d` (WS3 pipeline), `08d5014` (no-LU bridge rebuild via the
+femic writer: LU theme dropped at source, 10-year midpoint age smashing,
+femic stage-2 writer aggregation; ARE section 44,998 -> 1,608 lines),
+`01cf464` (area-conservation fail-fast gate and strict age parsing).
+External dependency: femic writer fix `d057aea`.
 
-- May consume the full-TSA WS3 bridge through the FRESH bridge convention.
-- Must not re-implement WS3.
-- Must not use the predecessor 11-LU stand subset.
+P2.5 measured answer (the 10-period gate question): the 30-period
+production horizon solves end-to-end in 1,407.8 s (compile ~600 s + solve
+~774 s). Policy: 15-period horizon for development, 20-period for
+production; 30p validated. The 3-period smoke profile remains the fast
+deterministic regression gate.
 
 ## Phase 3: Principal-Side Linear HiGHS LP
 
@@ -109,22 +108,21 @@ Parent issue: TBD
 
 Branch: `feature/p3-principal-lp`
 
-Status: planned
+Status: complete
 
 Goal: re-implement the principal-side salvage-subsidy model as a continuous
-linear HiGHS LP that emits offer fractions per aggregate opportunity.
+linear HiGHS LP that emits offer fractions per aggregate cohort.
 
-- [ ] P3.1 Define principal LP formulation from the refactor contract.
-- [ ] P3.2 Implement the HiGHS driver.
-- [ ] P3.3 Wire the `solve-principal` CLI command.
-- [ ] P3.4 Add synthetic tests and parity checks where possible.
-- [ ] P3.5 Verification and closeout.
+- [x] P3.1 Define principal LP formulation from the refactor contract.
+- [x] P3.2 Implement the HiGHS driver.
+- [x] P3.3 Wire the `principal-run` CLI command.
+- [x] P3.4 Add synthetic tests and parity checks where possible.
+- [x] P3.5 Verification and closeout.
 
-Acceptance boundary:
-
-- May emit continuous offer fractions in `[0, 1]`.
-- Must stay linear (no binaries, no rounding).
-- Must not claim production results without approved configuration.
+Evidence: `b573f59` (principal LP plus the MFRI fire-rate table),
+`07da484` (review follow-ups: structured error contracts, CLI stub
+retirement, area guard). Continuous offer fractions in `[0, 1]`, green AAC
+ceiling 2,937,509 m3/yr, MFRI-weighted expected burned loss.
 
 ## Phase 4: Agent-Side Linear HiGHS LP And Annual Fire Simulation
 
@@ -132,75 +130,82 @@ Parent issue: TBD
 
 Branch: `feature/p4-agent-fire`
 
-Status: planned
+Status: complete
 
-Goal: re-implement the agent-side harvest decision as a continuous linear HiGHS
-LP bounded by the principal offer, and add an annual fire simulation that
-generates salvage supply using development-type burn rates (`1/MFRI`).
+Goal: re-implement the agent-side harvest decision as a continuous linear
+HiGHS LP bounded by the principal offer, and add an annual fire simulation
+that generates salvage supply using development-type burn rates (`1/MFRI`).
 
-- [ ] P4.1 Define agent LP formulation from the refactor contract.
-- [ ] P4.2 Implement the HiGHS driver.
-- [ ] P4.3 Implement the annual fire simulation.
-- [ ] P4.4 Wire the `solve-agent` CLI command.
-- [ ] P4.5 Add synthetic tests and docs.
-- [ ] P4.6 Verification and closeout.
+- [x] P4.1 Define agent LP formulation from the refactor contract.
+- [x] P4.2 Implement the HiGHS driver.
+- [x] P4.3 Implement the annual fire simulation.
+- [x] P4.4 Wire the `agent-run` CLI command.
+- [x] P4.5 Add synthetic tests and docs.
+- [x] P4.6 Verification and closeout.
 
-Acceptance boundary:
+Evidence: `bde6b96`. The agent LP rows implement the `fire.py` dynamics
+directly (harvest -> fire -> salvage -> decay; live/burned balances;
+salvage feasibility; no double selling), so the LP and the simulation share
+one source of truth.
 
-- May emit continuous purchase fractions bounded by the principal offer.
-- May simulate annual fire with DT-wise burn rate `1/MFRI`.
-- Must not embed fire dynamics inside the LPs.
-
-## Phase 5: Rolling-Horizon Coordination Loop
+## Phase 5: Rolling-Horizon Coordination Loop And Ensemble Driver
 
 Parent issue: TBD
 
 Branch: `feature/p5-rolling-horizon`
 
-Status: planned
+Status: complete
 
 Goal: coordinate principal and agent models in a rolling-horizon loop with
-state updates across periods and optional salvage decay.
+state updates across periods, and scale to scenario ensembles.
 
-- [ ] P5.1 Define rolling-horizon state and iteration semantics.
-- [ ] P5.2 Implement the coordination loop.
-- [ ] P5.3 Wire the `rh-run` CLI command.
-- [ ] P5.4 Add synthetic integration tests.
-- [ ] P5.5 Verification and closeout.
+- [x] P5.1 Define rolling-horizon state and iteration semantics.
+- [x] P5.2 Implement the coordination loop.
+- [x] P5.3 Wire the `rh-run` CLI command and add the ensemble driver.
+- [x] P5.4 Add synthetic integration tests.
+- [x] P5.5 Verification and closeout.
 
-Acceptance boundary:
+Evidence: `91b4aad` (rolling-horizon engine, 100-year end-to-end run),
+`74bb3b3` (review fixes), `01b4f65` (ensemble driver with spawn process
+pool and budget measurement), `d81e42e` (review fixes). Measured
+performance: ~150 s per 100-year scenario; 4.41x speedup on the 4-scenario
+smoke ensemble; ~1,000 scenarios in ~40 minutes at `max_workers: 64` /
+per-scenario `workers: 1`.
 
-- May carry aggregate remaining area forward between periods.
-- May apply the documented optional salvage decay.
-- Must keep outputs deterministic and threshold-free.
-
-## Phase 6: Validation Against Predecessor Gurobi Results
+## Phase 6: Validation, Calibration, And Documentation
 
 Parent issue: TBD
 
-Branch: `feature/p6-validation`
+Branch: `main`
 
-Status: planned
+Status: active (P6.1 complete; P6.2 documentation pass in flight)
 
-Goal: validate the linear HiGHS pipeline against the predecessor Gurobi results
-and document remaining structural differences.
+Goal: validate the linear pipeline, fix what the audit finds, calibrate the
+economic surface against BC anchors, and ship the documentation suite.
 
-- [ ] P6.1 Define parity metrics and acceptance tolerances.
-- [ ] P6.2 Build regression fixtures from public-safe synthetic inputs.
-- [ ] P6.3 Wire the `export` CLI command for result artifacts.
-- [ ] P6.4 Document limitations and open questions.
-- [ ] P6.5 Verification and closeout.
-
-Acceptance boundary:
-
-- May compare aggregate objectives, volumes, and selected area against the
-  predecessor models on synthetic fixtures.
-- Must not claim exact parity with the binary stand-level models where the
-  formulations differ structurally.
+- [x] P6.1 Validation and economic calibration.
+  - [x] FS-VAL-01/02 severity audit and fixes (`82688b6`), validation
+        report update (`ca65048`): parameterized severity ladder with fatal
+        unmatched-label guard; coverage-scaled burned volume (upper-bound
+        caveat documented); salvageable stock corrected to 79,087.38 m3.
+  - [x] Economic recalibration (`bb4707e`, evidence `0e94ff4`): BC-anchored
+        prices/costs/stumpage, config-visible `Economics` surface.
+  - [x] Prompt-salvage adjustment (`e828dc6`): grade mix retargeted to the
+        year 1-3 regime; unsubsidized salvage margin ≈ -15 $/m3; flip
+        ≈ 19.2 $/m3; FESBC benchmark 14-15 $/m3 sits just below the
+        turn-on. Full record: `planning/phase6-validation-report.md` and
+        `planning/economics-calibration.md`.
+- [ ] P6.2 Documentation suite and release notes (README, Sphinx guides,
+      `CHANGE_LOG.md`, this roadmap, `RELEASE_NOTES.md`, version 0.1.0a1).
 
 ## Current Next Steps
 
-Phases 0 and 1 are complete on `main`. Phase 2 (full-TSA WS3 schedule
-integration) is implemented and passes unit tests and a 3-period smoke run;
-the 10-period full-TSA verification run exceeded the 10-minute gate and is
-awaiting a decision on horizon, solver options, or machine allocation.
+Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
+closes Phase 6. Beyond that:
+
+- **Full-BC scale-up.** Port the pipeline from the single-TSA (TSA29) study
+  area to additional TSAs toward a full-BC salvage-subsidy analysis, in
+  coordination with the UBC FRESH Lab program.
+- **Production hardening.** Stable public APIs, the reserved `export`
+  command, expanded integration coverage, and release packaging for a
+  non-alpha version line.

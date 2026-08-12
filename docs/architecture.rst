@@ -3,64 +3,73 @@ Architecture
 
 ``fresh-salvage`` implements a linear principal-agent salvage-subsidy
 pipeline for the Williams Lake Timber Supply Area (TSA29). The predecessor
-Gurobi binary models (``P_RH_Version.py``, ``A_RH_Version.py``, and the binary
-``Version 2.py`` / ``Version3.3.py`` scripts) are re-implemented as continuous
-linear programs solved with HiGHS.
+Gurobi binary stand-level models are re-implemented as continuous linear
+programs solved with HiGHS through ``highspy``.
 
-Intended Pipeline
------------------
+Pipeline Layers
+---------------
 
 .. code-block:: text
 
-   predecessor data sources
-              |
-              v
-        ingest / models
-              |
-              v
-        ws3 schedule (full TSA)
-              |
-              v
-        annual fire simulation
-              |
-              v
-   principal LP --> offer fractions
-              |
-              v
-   agent LP --> purchase fractions
-              |
-              v
-   rolling-horizon coordination
-              |
-              v
-        export artifacts
+   external VRI polygon layer (WL_VFSL)
+               |
+               v
+   (1) data: ingestion, typed stand records (246,957 stands)
+               |
+               v
+   (2) ws3: no-LU bridge rebuild (1,608 aggregated cohorts),
+       full-TSA schedule solve under the AAC ceiling
+               |
+               v
+   (3) principal: offer-fraction LP (1-year timesteps)
+               |
+               v
+   (4) agent: harvest/salvage LP with annual MFRI fire dynamics
+               |
+               v
+   (5) rh: rolling-horizon engine (10 decadal steps, fire replay,
+       cohort transitions, inventory injection)
+       ensemble: scenario-grid driver (spawn process pool)
+               |
+               v
+   run manifests and tabular artifacts (parquet/csv/JSONL)
 
 Module Layout
 -------------
 
 ``models``
-   Pydantic data models for inputs, decisions, and results.
+   Pydantic data models for inputs, configs, decisions, results, and
+   manifests.
 
 ``data``
-   Ingestion and parsing of predecessor data sources at the pipeline boundary.
+   Ingestion and parsing of the external stand layer at the pipeline
+   boundary; holds the calibrated economic constants.
 
 ``ws3``
-   Full-TSA WS3 bridge integration and schedule compilation.
+   Full-TSA WS3 bridge rebuild (age smashing, LU-theme drop, femic writer
+   aggregation, area-conservation gate) and schedule solve.
 
 ``principal``
    Principal-side linear HiGHS LP for salvage-subsidy offers.
 
 ``agent``
-   Agent-side linear HiGHS LP for harvest purchase decisions.
+   Agent-side linear HiGHS LP for harvest/salvage decisions.
 
 ``fire``
-   Annual fire simulation with development-type burn rates (``1/MFRI``).
+   Annual fire dynamics with development-type burn rates (``1/MFRI``),
+   shared by the agent LP and the rolling-horizon replay.
 
-``rolling_horizon``
-   Rolling-horizon coordination loop between principal and agent models.
+``rh``
+   Rolling-horizon coordination loop between WS3, the principal LP, and
+   the agent LP.
+
+``ensemble``
+   Scenario-grid driver: cartesian expansion over named config axes and
+   parallel execution in a spawn-based process pool.
 
 ``io``
    Tabular and JSON artifact input/output helpers.
 
 The detailed refactor contract for the predecessor-to-linear migration is
-documented in ``planning/phase0-refactor-contract.md``.
+documented in ``planning/phase0-refactor-contract.md``; the as-built model
+equations are documented in :doc:`model_semantics`.
