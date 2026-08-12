@@ -23,10 +23,11 @@ scenario ensembles through a spawn-based process pool.
 The TSA29 case study is calibrated against the 2025 fire-season
 burn-severity layer and Q4-2023 BC Interior log market anchors. Under the
 calibrated economics, unsubsidized salvage runs at roughly -15 $/m3 (SPF
-transition-mix basis) and the coupled system flips to a maximal salvage
-program at a subsidy of approximately 19.2 $/m3 — just above the FESBC
-benchmark support level of 14-15 $/m3. Every parameter is config-visible and
-every run emits a provenance manifest, so results stay auditable. The
+transition-mix basis) and the coupled system flips across a subsidy of
+approximately 19.1-19.4 $/m3 (turn-on 19.1, saturated by 19.4) — just above
+the FESBC benchmark support level of 14-15 $/m3. Every parameter is
+config-visible and every run emits a provenance manifest, so results stay
+auditable. The
 current release is ``0.1.0a1`` (alpha; public APIs may change).
 
 The Five-Layer Pipeline

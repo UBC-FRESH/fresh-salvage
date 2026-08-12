@@ -46,7 +46,7 @@ Grid Syntax
      horizon: 15
      period_length: 10
      steps: 10
-     workers: 1                # per-scenario WS3 threads
+     workers: 8                # per-scenario WS3 threads
    axes:                       # the cartesian grid
      subsidy_rate_per_m3: [0.0, 3.0]
      burn_rate_multiplier: [1.0, 2.0]
@@ -116,9 +116,9 @@ Performance Guidance
 --------------------
 
 The binding constraint is the per-scenario WS3 work: at the 15-period dev
-horizon the per-step problem build plus solve costs about 11 s and is
-serial-bound, so 10 steps lands at roughly **150 s per scenario** on the
-reference 64-core host. Consequences:
+horizon the per-step cost is about 15 s all-in (WS3 build plus solve ~11 s)
+and is serial-bound, so 10 steps lands at roughly **150 s per scenario** on
+the reference 64-core host. Consequences:
 
 - Prefer ``workers: 1`` per scenario on large grids and spend cores on
   ``max_workers`` instead — scenario parallelism scales; intra-scenario WS3

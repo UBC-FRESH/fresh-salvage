@@ -17,7 +17,7 @@ Phase 6 audited the pipeline on the real TSA29 inputs: the Phase 1 ingestion
 regression, the 100-year rolling-horizon base case, and the subsidy response
 of the coupled system. It found and fixed two ingestion defects, then
 recalibrated the economic surface when the audit showed the placeholder
-economics made salvage trivially profitable (margin ~ +90 $/m3
+economics made salvage trivially profitable (margin ~ +93 $/m3
 unsubsidized — not credible for the BC Interior).
 
 FS-VAL-01: Severity Ladder
@@ -164,7 +164,9 @@ FESBC 14-15 $/m3 benchmark sits just below the turn-on: benchmark-level
 support closes ~75-80% of the margin gap but does not flip the program.
 
 Green harvest is subsidy-invariant (36,279,196.26 m3 at burn x1.0, max
-pairwise spread 7.5e-9 — solver precision); salvage never displaces green
+pairwise spread 7.5e-9 — solver precision); the small delta vs the
+36,249,151.9 m3 base-case total above is the ``workers``-numerics caveat
+under Predecessor-Parity Caveats below. Salvage never displaces green
 harvest. The burn x0.0 control is exactly zero at every subsidy.
 
 Post-adjustment development-type economics on the real stands table (burned
