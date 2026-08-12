@@ -793,6 +793,13 @@ class RHRunConfig(BaseModel):
     (``horizon = period_length`` on their side). ``decay_rate`` is the annual
     retention of unsalvaged burned volume and ``discount_rate`` drives the
     agent NPV divisor; both default to the standalone principal/agent values.
+
+    ``subsidy_rate_per_m3`` is the salvage subsidy ($/m3 of burned volume
+    salvaged) charged in the principal cashflow and paid in the agent salvage
+    margin; it defaults to the shared ``data.SUBSIDY_RATE_PER_M3`` constant.
+    ``burn_rate_multiplier`` scales every MFRI-derived annual burn rate
+    (1.0 = the MFRI table as published; 0.0 = a fire-free counterfactual);
+    it is the ensemble axis for future-fire-pattern assumptions.
     """
 
     run_id: str = "tsa29-rh"
@@ -811,6 +818,8 @@ class RHRunConfig(BaseModel):
     decay_rate: float = 0.85
     discount_rate: float = 0.03
     burned_limit_annual_m3: float | None = None
+    subsidy_rate_per_m3: float = 3.0
+    burn_rate_multiplier: float = 1.0
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
 
@@ -857,6 +866,20 @@ class RHRunConfig(BaseModel):
     def _validate_burned_limit(cls, value: float | None) -> float | None:
         if value is not None and value < 0:
             raise ValueError("burned_limit_annual_m3 cannot be negative")
+        return value
+
+    @field_validator("subsidy_rate_per_m3")
+    @classmethod
+    def _validate_subsidy_rate(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("subsidy_rate_per_m3 cannot be negative")
+        return value
+
+    @field_validator("burn_rate_multiplier")
+    @classmethod
+    def _validate_burn_rate_multiplier(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("burn_rate_multiplier cannot be negative")
         return value
 
     def write_json(self, path: Path) -> Path:
@@ -1003,6 +1026,158 @@ class RHResult(BaseModel):
         }
 
 
+class EnsembleConfig(BaseModel):
+    """Configuration for one scenario ensemble of rolling-horizon runs.
+
+    The scenario grid is the cartesian product of the named ``axes``: every
+    axis is an explicit ``RHRunConfig`` field name mapped to the values it
+    takes across the ensemble (no positional ambiguity). ``base`` carries
+    the shared ``RHRunConfig`` field values (input paths, horizon, steps,
+    per-scenario WS3 ``workers``...). The driver owns ``run_id`` and
+    ``output_root`` per scenario, so both are reserved and must not appear
+    in ``base`` or ``axes``; grid-shape violations raise
+    :class:`fresh_salvage.ensemble.EnsembleError` with a structured code at
+    expansion time.
+    """
+
+    ensemble_id: str = "tsa29-ensemble"
+    base: dict[str, object] = Field(default_factory=dict)
+    axes: dict[str, list[object]] = Field(default_factory=dict)
+    max_workers: int = 4
+    output_root: Path
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("ensemble_id")
+    @classmethod
+    def _validate_ensemble_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("ensemble_id must not be empty")
+        return text
+
+    @field_validator("max_workers")
+    @classmethod
+    def _validate_max_workers(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("max_workers must be positive")
+        return value
+
+    def write_json(self, path: Path) -> Path:
+        """Write this config as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read(cls, path: Path) -> EnsembleConfig:
+        """Read an ensemble config from JSON or YAML."""
+
+        path = Path(path)
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return cls.model_validate(_load_yaml(text))
+        return cls.model_validate_json(text)
+
+
+class ScenarioRecord(BaseModel):
+    """Outcome record of one ensemble scenario (one JSONL line).
+
+    ``status`` is the rolling-horizon run status on success (``"optimal"``)
+    or ``"failed"``; a failed scenario carries the structured error code of
+    the underlying exception (``RHError.code``) or the exception type name.
+    """
+
+    name: str
+    run_id: str
+    overrides: dict[str, object] = Field(default_factory=dict)
+    status: str
+    error_code: str | None = None
+    error_message: str | None = None
+    wall_seconds: float = Field(ge=0.0)
+    output_root: Path
+    manifest_path: Path | None = None
+    steps_path: Path | None = None
+
+
+class EnsembleManifest(BaseModel):
+    """Evidence manifest for one scenario-ensemble run."""
+
+    manifest_version: str = MANIFEST_VERSION
+    ensemble_id: str
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    status: str
+    scenario_count: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    max_workers: int = Field(ge=1)
+    wall_seconds: float = Field(ge=0.0)
+    source_sha256: dict[str, str] = Field(default_factory=dict)
+    scenarios: list[ScenarioRecord] = Field(default_factory=list)
+    config: dict[str, object] = Field(default_factory=dict)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def write_json(self, path: Path) -> Path:
+        """Write this manifest as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read_json(cls, path: Path) -> EnsembleManifest:
+        """Read an ensemble manifest from JSON."""
+
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+class EnsembleResult(BaseModel):
+    """Typed result of one scenario-ensemble run."""
+
+    ensemble_id: str
+    status: str
+    scenario_count: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    max_workers: int = Field(ge=1)
+    wall_seconds: float = Field(ge=0.0)
+    scenarios: list[ScenarioRecord] = Field(default_factory=list)
+    scenarios_path: Path | None = None
+    manifest_path: Path | None = None
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def summary(self) -> dict[str, object]:
+        """Return a deterministic, JSON-friendly ensemble summary."""
+
+        return {
+            "ensemble_id": self.ensemble_id,
+            "status": self.status,
+            "scenario_count": self.scenario_count,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "max_workers": self.max_workers,
+            "wall_seconds": round(self.wall_seconds, 3),
+            "scenarios": [
+                {
+                    "name": record.name,
+                    "status": record.status,
+                    "error_code": record.error_code,
+                    "wall_seconds": round(record.wall_seconds, 3),
+                    "output_root": str(record.output_root),
+                }
+                for record in self.scenarios
+            ],
+            "artifacts": {
+                "scenarios": str(self.scenarios_path),
+                "manifest": str(self.manifest_path),
+            },
+            "diagnostics": [diagnostic.model_dump() for diagnostic in self.diagnostics],
+        }
+
+
 def safe_slug(value: str) -> str:
     """Return a filesystem-safe identifier slug."""
 
@@ -1031,6 +1206,9 @@ __all__ = [
     "ArtifactLayout",
     "DevelopmentType",
     "Diagnostic",
+    "EnsembleConfig",
+    "EnsembleManifest",
+    "EnsembleResult",
     "FireDefaults",
     "IngestManifest",
     "IngestResult",
@@ -1045,6 +1223,7 @@ __all__ = [
     "RHRunConfig",
     "RHStepRecord",
     "ScenarioInputs",
+    "ScenarioRecord",
     "ScenarioRunConfig",
     "Stand",
     "WS3Manifest",

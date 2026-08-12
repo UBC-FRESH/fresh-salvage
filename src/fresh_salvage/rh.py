@@ -259,16 +259,19 @@ def advance_cohort_table(
     age_caps: dict[int, int],
     period_length: int,
     regeneration_age: int,
+    burn_rate_multiplier: float = 1.0,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     """Advance the cohort table over one implemented step via fire dynamics.
 
     ``harvests``/``salvages`` carry one fraction tuple of length
     ``period_length`` per state row (agent H/S fractions of initial standing
     volume; area fractions equal volume fractions inside an age-homogeneous
-    cohort). Returns ``(new_state, totals)`` where the new table is
+    cohort). ``burn_rate_multiplier`` scales every cohort's MFRI-derived
+    annual burn rate (the ensemble fire-pattern axis); a scaled rate above
+    1.0 fails fast. Returns ``(new_state, totals)`` where the new table is
     re-aggregated over the state key and ``totals`` reports the step's
-    burned/harvested/salvaged areas (ha). Area is conserved to 1e-6 (relative)
-    or the step fails fast.
+    burned/harvested/salvaged areas (ha). Area is conserved to 1e-6
+    (relative) or the step fails fast.
     """
 
     if period_length <= 0:
@@ -303,6 +306,13 @@ def advance_cohort_table(
                 "rh_burn_rate_unknown",
                 f"cohort {cohort_id!r} has no MFRI fire-rate entry: {exc}",
             ) from exc
+        burn_rate *= burn_rate_multiplier
+        if burn_rate > 1.0:
+            raise RHError(
+                "rh_burn_rate_invalid",
+                f"cohort {cohort_id!r} annual burn rate {burn_rate} "
+                f"(multiplier {burn_rate_multiplier}) exceeds 1.0",
+            )
         cap = age_caps.get(int(row.curve_id))
         if cap is None:
             raise RHError(
@@ -610,7 +620,13 @@ def _run_step(
 
         # Principal LP: global AAC plus the WS3-derived per-cohort annual
         # green-volume ceilings (decadal volume split over the step window).
-        cohorts_p = principal._parse_are_cohorts(are_path, principal_economics, curves)
+        cohorts_p = principal._parse_are_cohorts(
+            are_path,
+            principal_economics,
+            curves,
+            subsidy_rate_per_m3=config.subsidy_rate_per_m3,
+            burn_rate_multiplier=config.burn_rate_multiplier,
+        )
         ceilings = [
             annual_ceiling(
                 decadal_volumes.get(cohort.cohort_id, 0.0), config.period_length
@@ -633,7 +649,12 @@ def _run_step(
 
         # Agent LP against the principal offers, then fire replay over the
         # implemented years advances the state.
-        cohorts_a = agent._parse_are_cohorts(are_path, agent_economics, curves)
+        cohorts_a = agent._parse_are_cohorts(
+            are_path,
+            agent_economics,
+            curves,
+            burn_rate_multiplier=config.burn_rate_multiplier,
+        )
         offers = agent.resolve_offers(
             cohorts_a, horizon=config.period_length, offers_path=offers_path
         )
@@ -643,6 +664,7 @@ def _run_step(
             horizon=config.period_length,
             decay_rate=config.decay_rate,
             discount_rate=config.discount_rate,
+            subsidy_rate_per_m3=config.subsidy_rate_per_m3,
             run_id=f"{step_slug}-agent",
         )
         decisions_path = layout.data_path(f"{step_slug}-decisions", ext="parquet")
@@ -658,6 +680,7 @@ def _run_step(
             age_caps=age_caps,
             period_length=config.period_length,
             regeneration_age=config.age_smashing.midpoint,
+            burn_rate_multiplier=config.burn_rate_multiplier,
         )
     except RHError:
         raise

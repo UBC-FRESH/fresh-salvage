@@ -8,11 +8,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fresh_salvage import __version__, agent, data, principal, rh, ws3
+from fresh_salvage import __version__, agent, data, ensemble, principal, rh, ws3
 from fresh_salvage.models import (
     AgentResult,
     AgentRunConfig,
     Diagnostic,
+    EnsembleConfig,
+    EnsembleResult,
     IngestResult,
     PrincipalResult,
     PrincipalRunConfig,
@@ -207,6 +209,42 @@ def rh_run(
         _print_failure(diagnostic, json_output, command="rh-run")
         raise typer.Exit(code=1)
     _print_rh_summary(result, json_output)
+
+
+@app.command(name="ensemble-run")
+def ensemble_run(
+    config_path: Annotated[
+        Path,
+        typer.Argument(help="Path to an ensemble YAML or JSON config."),
+    ],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON output."),
+    ] = False,
+) -> None:
+    """Run a scenario ensemble of rolling-horizon runs in parallel.
+
+    A failed scenario is recorded (status ``failed`` plus the structured
+    error code) and never aborts the ensemble; the command itself exits
+    non-zero only on fatal grid/input/bridge failures before or around the
+    scenario runs.
+    """
+    try:
+        config = EnsembleConfig.read(config_path)
+        result = ensemble.run_ensemble(config)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code=getattr(exc, "code", "ensemble_run_failed"),
+            message=str(exc),
+            context={
+                "config_path": str(config_path),
+                "exception_type": type(exc).__name__,
+            },
+        )
+        _print_failure(diagnostic, json_output, command="ensemble-run")
+        raise typer.Exit(code=1)
+    _print_ensemble_summary(result, json_output)
 
 
 @app.command()
@@ -414,6 +452,49 @@ def _print_rh_summary(result: RHResult, json_output: bool) -> None:
     console.print("Artifacts:")
     console.print(f"  {result.steps_path}")
     console.print(f"  {result.final_state_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_ensemble_summary(result: EnsembleResult, json_output: bool) -> None:
+    """Print the ensemble summary as JSON or a Rich report."""
+
+    if json_output:
+        payload = {"ok": True, "command": "ensemble-run", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(
+        f"[bold green]Ensemble complete:[/bold green] {result.ensemble_id} "
+        f"({result.status})"
+    )
+    console.print(
+        f"  Scenarios: {result.scenario_count} "
+        f"({result.succeeded} succeeded, {result.failed} failed)"
+    )
+    console.print(f"  Workers: {result.max_workers}")
+    console.print(f"  Wall time: {result.wall_seconds:.1f} s")
+
+    scenario_table = Table(title="Scenario outcomes (grid order)")
+    scenario_table.add_column("Scenario")
+    scenario_table.add_column("Status")
+    scenario_table.add_column("Error code")
+    scenario_table.add_column("Wall (s)", justify="right")
+    for record in result.scenarios:
+        scenario_table.add_row(
+            record.name,
+            record.status,
+            record.error_code or "",
+            f"{record.wall_seconds:.1f}",
+        )
+    console.print(scenario_table)
+
+    for diagnostic in result.diagnostics:
+        console.print(
+            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
+        )
+
+    console.print("Artifacts:")
+    console.print(f"  {result.scenarios_path}")
     console.print(f"  {result.manifest_path}")
 
 

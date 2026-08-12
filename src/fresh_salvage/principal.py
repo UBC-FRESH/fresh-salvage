@@ -597,8 +597,18 @@ def _parse_are_cohorts(
     are_path: Path,
     economics: dict[str, dict[str, float]],
     curves: dict[int, tuple[np.ndarray, np.ndarray]],
+    *,
+    subsidy_rate_per_m3: float = SUBSIDY_RATE_PER_M3,
+    burn_rate_multiplier: float = 1.0,
 ) -> list[PrincipalCohort]:
-    """Parse ARE data rows into cohort LP inputs (file order preserved)."""
+    """Parse ARE data rows into cohort LP inputs (file order preserved).
+
+    ``subsidy_rate_per_m3`` is the per-m3 salvage subsidy charged against the
+    principal cashflow (defaults to the shared ``data.py`` constant) and
+    ``burn_rate_multiplier`` scales every cohort's MFRI-derived annual burn
+    rate; a scaled rate above 1.0 (a burn probability, not a rate ratio)
+    fails fast at the boundary.
+    """
 
     if not are_path.is_file():
         raise PrincipalError(
@@ -649,6 +659,13 @@ def _parse_are_cohorts(
                 f"stratum {stratum_code!r} on {are_path} line {line_number} has no "
                 f"MFRI fire-rate entry: {exc}",
             ) from exc
+        burn_rate *= burn_rate_multiplier
+        if burn_rate > 1.0:
+            raise PrincipalError(
+                "principal_burn_rate_invalid",
+                f"stratum {stratum_code!r} annual burn rate {burn_rate} "
+                f"(multiplier {burn_rate_multiplier}) exceeds 1.0",
+            )
         standing_volume_m3 = area_ha * _curve_volume_m3_per_ha(curves, curve_id, age)
         burn_share = economics[development_type]["burn_share"]
         burned_volume_m3 = standing_volume_m3 * burn_share
@@ -663,7 +680,7 @@ def _parse_are_cohorts(
                 cashflow=(
                     standing_volume_m3 * GREEN_STUMPAGE_RATE
                     + burned_volume_m3 * BURNED_STUMPAGE_RATE
-                    - burned_volume_m3 * SUBSIDY_RATE_PER_M3
+                    - burned_volume_m3 * subsidy_rate_per_m3
                 ),
                 burned_value=burned_volume_m3 * economics[development_type]["burned_price"],
                 burn_rate=burn_rate,

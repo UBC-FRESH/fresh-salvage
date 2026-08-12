@@ -273,6 +273,7 @@ def build_agent_lp(
     horizon: int,
     decay_rate: float = fire.DEFAULT_BURNED_DECAY_RATE,
     discount_rate: float = 0.03,
+    subsidy_rate_per_m3: float = SUBSIDY_RATE_PER_M3,
 ) -> AgentLP:
     """Build the continuous agent harvest/salvage LP as a HiGHS model.
 
@@ -280,6 +281,8 @@ def build_agent_lp(
     columns, then all ``S``, ``V``, ``B`` columns, each block of size
     ``len(cohorts) * horizon``. ``H[c,t]``/``S[c,t]`` carry the offered
     fractions as upper bounds; ``V``/``B`` are bounded to ``[0, 1]``.
+    ``subsidy_rate_per_m3`` is the per-m3 salvage subsidy added to the
+    salvage margin (defaults to the shared ``data.py`` constant).
     """
 
     if not cohorts:
@@ -339,7 +342,7 @@ def build_agent_lp(
             cohort.burned_price_m3
             - BURNED_HARVEST_COST
             - BURNED_STUMPAGE_RATE
-            + SUBSIDY_RATE_PER_M3
+            + subsidy_rate_per_m3
         )
         base = c_index * horizon
         for year in range(horizon):
@@ -458,6 +461,7 @@ def solve_agent(
     horizon: int,
     decay_rate: float = fire.DEFAULT_BURNED_DECAY_RATE,
     discount_rate: float = 0.03,
+    subsidy_rate_per_m3: float = SUBSIDY_RATE_PER_M3,
     run_id: str = "agent-solve",
 ) -> AgentResult:
     """Build and solve the agent LP; return the typed result.
@@ -472,6 +476,7 @@ def solve_agent(
         horizon=horizon,
         decay_rate=decay_rate,
         discount_rate=discount_rate,
+        subsidy_rate_per_m3=subsidy_rate_per_m3,
     )
     solve_started = time.monotonic()
     built.model.run()
@@ -760,8 +765,15 @@ def _parse_are_cohorts(
     are_path: Path,
     economics: dict[str, dict[str, float]],
     curves: dict[int, tuple[np.ndarray, np.ndarray]],
+    *,
+    burn_rate_multiplier: float = 1.0,
 ) -> list[AgentCohort]:
-    """Parse ARE data rows into cohort LP inputs (file order preserved)."""
+    """Parse ARE data rows into cohort LP inputs (file order preserved).
+
+    ``burn_rate_multiplier`` scales every cohort's MFRI-derived annual burn
+    rate; a scaled rate above 1.0 (a burn probability, not a rate ratio)
+    fails fast at the boundary.
+    """
 
     if not are_path.is_file():
         raise AgentError("agent_are_missing", f"ARE section not found: {are_path}")
@@ -813,6 +825,13 @@ def _parse_are_cohorts(
                 f"stratum {stratum_code!r} on {are_path} line {line_number} has "
                 f"no MFRI fire-rate entry: {exc}",
             ) from exc
+        burn_rate *= burn_rate_multiplier
+        if burn_rate > 1.0:
+            raise AgentError(
+                "agent_burn_rate_invalid",
+                f"stratum {stratum_code!r} annual burn rate {burn_rate} "
+                f"(multiplier {burn_rate_multiplier}) exceeds 1.0",
+            )
         standing_volume_m3 = area_ha * _curve_volume_m3_per_ha(curves, curve_id, age)
         cohorts.append(
             AgentCohort(
