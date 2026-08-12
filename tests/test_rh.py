@@ -8,13 +8,14 @@ any of those are unavailable (e.g. in CI).
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from fresh_salvage import fire, principal, rh
-from fresh_salvage.models import RHRunConfig
+from fresh_salvage.models import AgentDecisionRecord, RHRunConfig
 
 STRATUM = "sbps_pli"
 CURVE_ID = 2921000
@@ -300,6 +301,136 @@ def test_advance_fraction_over_allocation_fails_fast() -> None:
         _advance(state, [tuple([0.11]) * 10])
 
     assert excinfo.value.code == "rh_fire_simulation_failed"
+
+
+def test_advance_rejects_non_positive_period_length() -> None:
+    state = _state([_row(25, 100.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _advance(state, [()], period_length=0)
+
+    assert excinfo.value.code == "rh_invalid_period_length"
+
+
+def test_advance_area_conservation_failure_fails_fast() -> None:
+    # A NaN-area row is corrupt state: every ``area > 0`` comparison on it is
+    # False, so the advance silently drops the cohort's area and the
+    # conservation gate must fire instead of trusting the shrunk table.
+    state = _state([_row(25, 100.0), _row(35, float("nan"))])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _advance(state, [tuple([0.0]) * 10, tuple([0.0]) * 10])
+
+    assert excinfo.value.code == "rh_area_conservation_failed"
+
+
+def test_advance_area_conservation_catches_negative_area_corruption() -> None:
+    # A negative-area row (never admitted by the ARE parser) drops out of the
+    # advanced table entirely, so the conserved total no longer reconciles.
+    state = _state([_row(25, 100.0), _row(35, -50.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _advance(state, [tuple([0.0]) * 10, tuple([0.0]) * 10])
+
+    assert excinfo.value.code == "rh_area_conservation_failed"
+
+
+# --- agent decision -> fraction schedule alignment --------------------------
+
+
+def _decision(cohort_id: str, year: int, harvest: float = 0.0) -> AgentDecisionRecord:
+    return AgentDecisionRecord(
+        cohort_id=cohort_id,
+        year=year,
+        harvest_fraction=harvest,
+        salvage_fraction=0.0,
+        harvest_volume_m3=0.0,
+        salvage_volume_m3=0.0,
+    )
+
+
+def test_fraction_schedules_align_in_state_row_order() -> None:
+    state = _state([_row(25, 100.0), _row(65, 50.0)])
+    cohort_ids = [
+        "managed:2901000:sbps_pli:2921000:25",
+        "managed:2901000:sbps_pli:2921000:65",
+    ]
+    decisions = [
+        _decision(cohort_id, year, harvest=0.01 * year)
+        for cohort_id in cohort_ids
+        for year in (1, 2, 3)
+    ]
+
+    harvests, salvages = rh._fraction_schedules(
+        state, SimpleNamespace(decisions=decisions), 3
+    )
+
+    assert harvests == [(0.01, 0.02, 0.03), (0.01, 0.02, 0.03)]
+    assert salvages == [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)]
+
+
+def test_fraction_schedules_reject_out_of_order_decisions() -> None:
+    state = _state([_row(25, 100.0)])
+    cohort_id = "managed:2901000:sbps_pli:2921000:25"
+    decisions = [_decision(cohort_id, 2), _decision(cohort_id, 1)]
+
+    with pytest.raises(rh.RHError) as excinfo:
+        rh._fraction_schedules(state, SimpleNamespace(decisions=decisions), 10)
+
+    assert excinfo.value.code == "rh_decision_order_invalid"
+
+
+def test_fraction_schedules_reject_uncovered_cohort() -> None:
+    state = _state([_row(25, 100.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        rh._fraction_schedules(state, SimpleNamespace(decisions=[]), 10)
+
+    assert excinfo.value.code == "rh_decisions_incomplete"
+
+
+# --- inventory injection gates -----------------------------------------------
+
+
+class _StubDevelopmentType:
+    """Minimal DevelopmentType stand-in: only the period-0 area map matters."""
+
+    def __init__(self) -> None:
+        self._areas: dict[int, dict[int, float]] = {0: {}}
+
+
+class _StubForestModel:
+    """Minimal ForestModel stand-in carrying named development types."""
+
+    def __init__(self, dtype_keys: list[tuple[str, ...]]) -> None:
+        self.dtypes = {key: _StubDevelopmentType() for key in dtype_keys}
+        self.reset_calls = 0
+
+    def initialize_areas(self, reset_areas: bool = False) -> None:
+        self.reset_calls += reset_areas
+
+
+def test_inject_cohort_table_populates_period0_areas() -> None:
+    state = _state([_row(25, 100.0), _row(35, 50.0)])
+    dtype_key = ("29", "managed", "2901000", "sbps_pli", "2921000")
+    model = _StubForestModel([dtype_key, ("29", "managed", "2901000", "idf_fd", "1")])
+
+    provenance = rh.inject_cohort_table(model, state)
+
+    assert model.dtypes[dtype_key]._areas[0] == {25: 100.0, 35: 50.0}
+    assert model.dtypes[("29", "managed", "2901000", "idf_fd", "1")]._areas[0] == {}
+    assert model.reset_calls == 1
+    assert provenance == {"dtypes_with_area": 1, "area_ha": 150.0}
+
+
+def test_inject_cohort_table_unknown_dtype_fails_fast() -> None:
+    state = _state([_row(25, 100.0)])
+    model = _StubForestModel([("29", "managed", "2901000", "idf_fd", "1")])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        rh.inject_cohort_table(model, state)
+
+    assert excinfo.value.code == "rh_state_dtype_unknown"
 
 
 # --- WS3 ceiling flow-through into the principal LP --------------------------

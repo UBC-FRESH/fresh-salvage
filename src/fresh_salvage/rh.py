@@ -271,6 +271,11 @@ def advance_cohort_table(
     or the step fails fast.
     """
 
+    if period_length <= 0:
+        raise RHError(
+            "rh_invalid_period_length",
+            f"period_length must be positive: {period_length}",
+        )
     if len(harvests) != len(state) or len(salvages) != len(state):
         raise RHError(
             "rh_schedule_shape_mismatch",
@@ -317,7 +322,7 @@ def advance_cohort_table(
                 "rh_fire_simulation_failed",
                 f"cohort {cohort_id!r} fire replay failed: {exc}",
             ) from exc
-        live_end = years[-1].live_after if years else 1.0
+        live_end = years[-1].live_after
         harvested = sum(harvest_schedule)
         salvaged = sum(salvage_schedule)
         unsalvaged_burned = 1.0 - live_end - harvested - salvaged
@@ -372,8 +377,10 @@ def advance_cohort_table(
         .loc[:, list(COHORT_COLUMNS)]
     )
     _require_area_conserved(
-        float(state["area_ha"].sum()),
-        float(new_state["area_ha"].sum()),
+        # skipna=False: a corrupt (NaN) area must reach the gate, not be
+        # silently skipped by the reduction.
+        float(state["area_ha"].sum(skipna=False)),
+        float(new_state["area_ha"].sum(skipna=False)),
         context="state advance",
     )
     return new_state, totals
@@ -410,7 +417,9 @@ def inject_cohort_table(model: object, state: pd.DataFrame) -> dict[str, object]
         for area in development_type._areas[0].values()
     )
     _require_area_conserved(
-        float(state["area_ha"].sum()), injected_area_ha, context="inventory injection"
+        float(state["area_ha"].sum(skipna=False)),
+        injected_area_ha,
+        context="inventory injection",
     )
     return {"dtypes_with_area": len(grouped), "area_ha": injected_area_ha}
 
@@ -490,7 +499,14 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
         str(int(age)): float(area)
         for age, area in state.groupby("age")["area_ha"].sum().items()
     }
-    status = "optimal"
+    # Derive the run status from the recorded per-step WS3 solve statuses
+    # instead of asserting a constant: a step that solved non-optimally
+    # without raising would surface here as "degraded".
+    status = (
+        "optimal"
+        if all(record.ws3_status == "optimal" for record in step_records)
+        else "degraded"
+    )
     manifest = RHManifest(
         run_id=config.run_id,
         stands_path=config.stands_path,
@@ -726,11 +742,26 @@ def _period1_cohort_volumes(
 def _fraction_schedules(
     state: pd.DataFrame, result: object, period_length: int
 ) -> tuple[list[tuple[float, ...]], list[tuple[float, ...]]]:
-    """Align agent H/S fractions to state row order as per-year schedules."""
+    """Align agent H/S fractions to state row order as per-year schedules.
+
+    Decisions are grouped per cohort in emission order, so each cohort's
+    years must be non-decreasing; an out-of-order emission would silently
+    misalign the schedule tuples with the implemented years and fails fast.
+    """
 
     harvest_by_id: dict[str, list[float]] = {}
     salvage_by_id: dict[str, list[float]] = {}
+    last_year_by_id: dict[str, int] = {}
     for decision in result.decisions:
+        last_year = last_year_by_id.get(decision.cohort_id)
+        if last_year is not None and decision.year < last_year:
+            raise RHError(
+                "rh_decision_order_invalid",
+                f"agent decisions for cohort {decision.cohort_id!r} are not "
+                f"year-ascending (year {decision.year} follows year {last_year}); "
+                "fraction schedules would misalign the implemented years",
+            )
+        last_year_by_id[decision.cohort_id] = decision.year
         harvest_by_id.setdefault(decision.cohort_id, []).append(decision.harvest_fraction)
         salvage_by_id.setdefault(decision.cohort_id, []).append(decision.salvage_fraction)
     harvests: list[tuple[float, ...]] = []
@@ -752,9 +783,17 @@ def _fraction_schedules(
 
 
 def _require_area_conserved(before_ha: float, after_ha: float, *, context: str) -> None:
-    """Fail fast when area is not conserved to the relative tolerance."""
+    """Fail fast when area is not conserved to the relative tolerance.
 
-    if math.isclose(after_ha, before_ha, rel_tol=AREA_CONSERVATION_REL_TOLERANCE):
+    Non-finite totals never conserve: pandas reductions skip NaN by default,
+    so a corrupt (NaN/inf) area could otherwise pass ``isclose`` unnoticed.
+    """
+
+    if (
+        math.isfinite(before_ha)
+        and math.isfinite(after_ha)
+        and math.isclose(after_ha, before_ha, rel_tol=AREA_CONSERVATION_REL_TOLERANCE)
+    ):
         return
     raise RHError(
         "rh_area_conservation_failed",
