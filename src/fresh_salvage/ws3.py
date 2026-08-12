@@ -4,29 +4,40 @@ Ports the predecessor integration in
 ``masc-yunhao-xu/Gurobi/Rolling_horizon_structure/ws3_masc_integration.py`` into
 the typed fresh-salvage pipeline. The predecessor's 11-landscape-unit binary
 membership rewrite, landscape-unit validation, and subset extraction are
-removed: the full TSA29 WS3 bridge is imported as-is and the compiled schedule
-covers every development type and period.
+removed. The model is compiled from a Landscape-Unit-free bridge rebuilt from
+the femic stage-1 Woodstock CSVs: ``landscape_unit_id`` is dropped at the
+source, fragment ages are smashed to deterministic 10-year class midpoints
+before grouping, and femic's own stage-2 writer
+(``femic.ws3_bridge.build_ws3_sections_from_femic_woodstock``) aggregates area
+over ``(TSA, managed, AU, stratum, curve, age)`` so every development type key
+is unique and the compiled schedule covers every development type and period.
 
-The solve follows the predecessor TSA29 conventions:
+The solve follows the TSA29 conventions:
 
 - initial-inventory ages are smashed into deterministic 10-year classes
   (``age // width * width + midpoint``);
-- the ``cc`` clear-cut action is restricted to age >= 80 (the 80 m3/ha
-  merchantability rule) and removed for the never-merchantable yield curves;
+- the ``cc`` clear-cut action is constrained to operable ages [60, 300] and
+  removed for the never-merchantable yield curves — fewer treatment age
+  options in each dynamic-programming state tree means fewer branches, fewer
+  Model-I paths, and a substantially smaller LP column count;
 - an annual-allowable-cut ceiling bounds each period at
   ``aac_annual_m3 * period_length`` through a WS3 ``cgen_data`` general
   constraint;
 - the objective maximizes utilized harvest volume (``totvol * utilization``)
   under an even-flow constraint with the configured tolerance.
 
-The ws3 package is imported lazily so the pure helpers (age smashing, AAC
-ceiling, status normalization) stay unit-testable without the ws3 dependency.
+The ws3 and femic packages are imported lazily so the pure helpers (age
+smashing, AAC ceiling, status normalization) stay unit-testable without those
+dependencies.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import sys
 import time
 from datetime import UTC, datetime
 from functools import partial
@@ -46,12 +57,14 @@ from fresh_salvage.models import (
 WS3_DEVELOPMENT_TYPE_INDEX = 3
 DEFAULT_AGE_SMASHING_WIDTH = 10
 DEFAULT_AGE_SMASHING_MIDPOINT = 5
-MIN_HARVEST_AGE = 80
+CC_MIN_HARVEST_AGE = 60
+CC_MAX_HARVEST_AGE = 300
 DEFAULT_AAC_ANNUAL_M3 = 2_937_509
 DEFAULT_UTILIZATION = 0.85
 DEFAULT_EVEN_FLOW_TOLERANCE = 0.1
 
-# Yield curves whose volume never reaches the 80 m3/ha merchantability rule.
+# Yield curves whose volume never reaches the merchantability rule; they lose
+# ``cc`` operability entirely regardless of the configured harvest age range.
 NEVER_MERCHANTABLE_CURVES = frozenset(
     {"2921000", "2921004", "2921014", "2901001", "2901014"}
 )
@@ -62,6 +75,19 @@ CANONICAL_TSA29_BRIDGE = Path(
     "/srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/"
     "femic-tsa29-instance/output/woodstock_tsa29_validated/ws3_bridge"
 )
+DERIVED_BRIDGE_DIRNAME = "ws3_bridge_no_lu"
+DROPPED_THEME_DESCRIPTION = "Landscape Unit"
+
+FEMIC_SRC_ROOT = Path("/srv/shared-data/gep/jupyterhub07-projects/davis/femic/src")
+STAGE1_AREAS_FILENAME = "woodstock_areas.csv"
+STAGE1_FILE_NAMES = (
+    "woodstock_yields.csv",
+    STAGE1_AREAS_FILENAME,
+    "woodstock_actions.csv",
+    "woodstock_transitions.csv",
+)
+STAGE1_DERIVED_DIRNAME = "woodstock_no_lu_smashed"
+LANDSCAPE_UNIT_COLUMN = "landscape_unit_id"
 
 SCHEDULE_RAW_COLUMNS = ("dtype_key", "age_class", "area_ha", "harvest_action", "period", "etype")
 SCHEDULE_COLUMNS = (
@@ -148,12 +174,13 @@ def smash_initial_inventory_ages(
     }
 
 
-def enforce_min_harvest_age(
+def enforce_harvest_age_range(
     model: object,
     action_code: str = "cc",
-    min_age: int = MIN_HARVEST_AGE,
+    min_age: int = CC_MIN_HARVEST_AGE,
+    max_age: int = CC_MAX_HARVEST_AGE,
 ) -> dict[str, object]:
-    """Apply the 80 m3/ha merchantability minimum age to one harvest action.
+    """Constrain one harvest action to operable ages ``[min_age, max_age]``.
 
     Never-merchantable yield curves lose operability entirely
     (``oper_expr`` popped, not emptied); every other curve is restricted to
@@ -170,7 +197,6 @@ def enforce_min_harvest_age(
             development_type.oper_expr.pop(action_code, None)
             oper_expr_popped += 1
         else:
-            max_age = development_type._max_age
             development_type.oper_expr[action_code] = [
                 f"_age >= {min_age} and _age <= {max_age}"
             ]
@@ -178,10 +204,180 @@ def enforce_min_harvest_age(
     model.compile_actions()
     return {
         "min_harvest_age": min_age,
+        "max_harvest_age": max_age,
         "never_merchantable_curves": sorted(NEVER_MERCHANTABLE_CURVES),
         "oper_expr_popped": oper_expr_popped,
         "oper_expr_rewritten": oper_expr_rewritten,
     }
+
+
+def derived_bridge_path(output_root: Path) -> Path:
+    """Return the deterministic derived-bridge workspace under an output root."""
+
+    return Path(output_root) / "derived" / DERIVED_BRIDGE_DIRNAME
+
+
+def _split_theme_blocks(lan_text: str) -> list[tuple[str, list[str]]]:
+    """Split a LAN text into ``(description, body_lines)`` theme blocks."""
+
+    blocks: list[tuple[str, list[str]]] = []
+    description: str | None = None
+    body: list[str] = []
+    for line in lan_text.splitlines():
+        if line.startswith("*THEME"):
+            if description is not None:
+                blocks.append((description, body))
+            description = line[len("*THEME") :].strip()
+            body = []
+        elif description is not None:
+            body.append(line)
+    if description is not None:
+        blocks.append((description, body))
+    return blocks
+
+
+def _load_femic_bridge_writer() -> object:
+    """Import femic's stage-2 Woodstock section writer, lazily extending sys.path.
+
+    The femic repository uses a src layout and is not a fresh-salvage install
+    dependency; when a plain import fails, the ``FEMIC_SRC`` environment
+    variable (falling back to :data:`FEMIC_SRC_ROOT`) is inserted into
+    ``sys.path`` before retrying. Raises ``WS3Error`` when femic's writer
+    cannot be imported at all.
+    """
+
+    try:
+        from femic.ws3_bridge import build_ws3_sections_from_femic_woodstock
+
+        return build_ws3_sections_from_femic_woodstock
+    except ImportError:
+        pass
+    femic_src = Path(os.environ.get("FEMIC_SRC", str(FEMIC_SRC_ROOT)))
+    if femic_src.is_dir() and str(femic_src) not in sys.path:
+        sys.path.insert(0, str(femic_src))
+    try:
+        from femic.ws3_bridge import build_ws3_sections_from_femic_woodstock
+
+        return build_ws3_sections_from_femic_woodstock
+    except ImportError as exc:
+        raise WS3Error(
+            "femic_import_failed",
+            "femic's WS3 bridge writer is required to rebuild the no-LU bridge; "
+            "add the femic src directory to PYTHONPATH (e.g. "
+            f"PYTHONPATH={FEMIC_SRC_ROOT}): {exc}",
+        ) from exc
+
+
+def build_smashed_no_lu_bridge(
+    stage1_dir: Path,
+    dest_dir: Path,
+    width: int = DEFAULT_AGE_SMASHING_WIDTH,
+    midpoint: int = DEFAULT_AGE_SMASHING_MIDPOINT,
+) -> Path:
+    """Materialize the natively aggregated Landscape-Unit-free WS3 bridge.
+
+    Reads the femic stage-1 Woodstock CSVs, drops ``landscape_unit_id``, and
+    smashes every fragment age to its deterministic age-class midpoint
+    (``age // width * width + midpoint``, identical to :func:`midpoint_age`)
+    *before* any aggregation. All section text is written by femic's own
+    stage-2 writer, so area is summed over the true
+    ``(tsa, ifm, au_id, stratum_code, curve_id, age)`` key at the source and
+    the emitted bridge carries exactly five themes. The staged CSVs are kept
+    beside ``dest_dir`` for provenance. Raises ``WS3Error`` when the stage-1
+    package is incomplete or the written bridge violates the smash contract.
+    """
+
+    source = Path(stage1_dir)
+    missing_files = [name for name in STAGE1_FILE_NAMES if not (source / name).is_file()]
+    if missing_files:
+        raise WS3Error(
+            "ws3_stage1_incomplete",
+            f"femic stage-1 Woodstock directory {source} is missing files: "
+            + ", ".join(missing_files),
+        )
+    writer = _load_femic_bridge_writer()
+
+    dest = Path(dest_dir)
+    staging = dest.parent / STAGE1_DERIVED_DIRNAME
+    staging.mkdir(parents=True, exist_ok=True)
+
+    areas = pd.read_csv(source / STAGE1_AREAS_FILENAME)
+    if LANDSCAPE_UNIT_COLUMN in areas.columns:
+        areas = areas.drop(columns=[LANDSCAPE_UNIT_COLUMN])
+    ages = pd.to_numeric(areas["age"], errors="coerce").fillna(0).astype(int)
+    areas["age"] = ages.map(partial(midpoint_age, width=width, midpoint=midpoint))
+    areas.to_csv(staging / STAGE1_AREAS_FILENAME, index=False)
+    for name in STAGE1_FILE_NAMES:
+        if name == STAGE1_AREAS_FILENAME:
+            continue
+        shutil.copy2(source / name, staging / name)
+
+    result = writer(
+        woodstock_dir=staging,
+        output_dir=dest,
+        model_name=BRIDGE_FILE_PREFIX,
+    )
+    written = Path(result.output_dir)
+    _verify_smashed_bridge(written, width, midpoint)
+    return written
+
+
+def _verify_smashed_bridge(
+    bridge: Path,
+    width: int = DEFAULT_AGE_SMASHING_WIDTH,
+    midpoint: int = DEFAULT_AGE_SMASHING_MIDPOINT,
+) -> None:
+    """Fail fast when a written bridge violates the no-LU smash contract."""
+
+    if _lan_contains_landscape_unit_theme(bridge):
+        raise WS3Error(
+            "ws3_bridge_lu_theme_unexpected",
+            f"rebuilt bridge {bridge} still carries the "
+            f"{DROPPED_THEME_DESCRIPTION!r} theme",
+        )
+    are_path = Path(bridge) / f"{BRIDGE_FILE_PREFIX}.are"
+    offenders = [
+        line
+        for line in are_path.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("*A")
+        and int(line.split()[-2]) % width != midpoint % width
+    ]
+    if offenders:
+        raise WS3Error(
+            "ws3_bridge_age_unsmashed",
+            f"rebuilt bridge {are_path} contains {len(offenders)} ARE rows whose "
+            f"age is not a {width}-year class midpoint (e.g. {offenders[0]!r})",
+        )
+
+
+def _lan_contains_landscape_unit_theme(bridge: Path) -> bool:
+    """Return whether a bridge LAN still carries the Landscape Unit theme."""
+
+    lan_path = Path(bridge) / f"{BRIDGE_FILE_PREFIX}.lan"
+    if not lan_path.is_file():
+        return False
+    return any(
+        description.lower() == DROPPED_THEME_DESCRIPTION.lower()
+        for description, _ in _split_theme_blocks(lan_path.read_text(encoding="utf-8"))
+    )
+
+
+def resolved_bridge_path(config: WS3RunConfig) -> Path:
+    """Return the bridge a run loads, rebuilding the no-LU bridge when needed.
+
+    When ``config.bridge_path`` is the canonical Landscape-Unit bridge, the
+    Landscape-Unit-free age-smashed bridge is rebuilt from the sibling femic
+    stage-1 Woodstock CSVs (which live in the bridge's parent directory) into
+    ``config.output_root`` and returned; an already rebuilt bridge is used
+    as-is.
+    """
+
+    canonical = Path(config.bridge_path)
+    if canonical.is_dir() and _lan_contains_landscape_unit_theme(canonical):
+        return build_smashed_no_lu_bridge(
+            canonical.parent, derived_bridge_path(Path(config.output_root))
+        )
+    return canonical
 
 
 def aac_ceiling_constraints(
@@ -226,13 +422,17 @@ def smoke_config(bridge_path: Path, output_root: Path) -> WS3RunConfig:
 
 
 def load_full_model(config: WS3RunConfig, verbose: bool = False) -> object:
-    """Import the full TSA29 WS3 bridge and apply the TSA29 solve conventions.
+    """Compile the full TSA29 WS3 model from the derived LU-free bridge.
 
-    Raises ``WS3Error`` with a structured code on boundary failures; the caller
-    converts non-fatal anomalies into ``Diagnostic`` records.
+    The configured ``bridge_path`` is resolved through
+    :func:`resolved_bridge_path`: a canonical 6-theme bridge is first
+    transformed into the derived Landscape-Unit-free bridge under
+    ``output_root``. Raises ``WS3Error`` with a structured code on boundary
+    failures; the caller converts non-fatal anomalies into ``Diagnostic``
+    records.
     """
 
-    bridge = Path(config.bridge_path)
+    bridge = resolved_bridge_path(config)
     if not bridge.is_dir():
         raise WS3Error("ws3_bridge_missing", f"WS3 bridge directory does not exist: {bridge}")
     missing_files = [
@@ -298,7 +498,7 @@ def load_full_model(config: WS3RunConfig, verbose: bool = False) -> object:
     model.add_null_action()
     model.reset_actions()
     model.compile_actions()
-    enforce_min_harvest_age(model, action_code=action_code)
+    enforce_harvest_age_range(model, action_code=action_code)
     return model
 
 
@@ -310,15 +510,17 @@ def run_ws3(config: WS3RunConfig, verbose: bool = False) -> WS3Result:
     """
 
     diagnostics: list[Diagnostic] = []
-    bridge = Path(config.bridge_path)
-    layout = ArtifactLayout(output_root=Path(config.output_root)).initialize()
-    run_slug = safe_slug(config.run_id)
+    bridge = resolved_bridge_path(config)
+    run_config = config.model_copy(update={"bridge_path": bridge})
+    layout = ArtifactLayout(output_root=Path(run_config.output_root)).initialize()
+    run_slug = safe_slug(run_config.run_id)
     data_path = layout.data_path(f"{run_slug}-schedule", ext="parquet")
     csv_path = layout.data_path(f"{run_slug}-schedule", ext="csv")
     manifest_path = layout.manifest_path(f"{run_slug}-ws3-manifest")
 
-    model = load_full_model(config, verbose=verbose)
-    problem = _build_problem(model, config, verbose=verbose)
+    model = load_full_model(run_config, verbose=verbose)
+    problem = _build_problem(model, run_config, verbose=verbose)
+    lp_dimensions = problem_lp_dimensions(problem)
     solve_started = time.monotonic()
     try:
         problem.solve(verbose=verbose)
@@ -335,7 +537,7 @@ def run_ws3(config: WS3RunConfig, verbose: bool = False) -> WS3Result:
             f"full TSA29 WS3 solve did not reach optimal status: {status}",
         )
 
-    schedule, objective_value = _compile_schedule(model, problem, config)
+    schedule, objective_value = _compile_schedule(model, problem, run_config)
     schedule.to_parquet(data_path, index=False)
     schedule.to_csv(csv_path, index=False)
 
@@ -349,27 +551,31 @@ def run_ws3(config: WS3RunConfig, verbose: bool = False) -> WS3Result:
     }
 
     manifest = WS3Manifest(
-        run_id=config.run_id,
+        run_id=run_config.run_id,
         bridge_path=bridge,
         completed_at=datetime.now(UTC),
         status=status,
-        periods=config.horizon,
+        periods=run_config.horizon,
         objective_value=objective_value,
         schedule_rows=len(schedule),
+        lp_rows=lp_dimensions["lp_rows"],
+        lp_columns=lp_dimensions["lp_columns"],
         solve_seconds=solve_seconds,
         bridge_checksums=_file_checksums(bridge),
-        config=config.model_dump(mode="json"),
+        config=run_config.model_dump(mode="json"),
         diagnostics=diagnostics,
     )
     manifest.write_json(manifest_path)
 
     return WS3Result(
-        run_id=config.run_id,
+        run_id=run_config.run_id,
         status=status,
-        periods=config.horizon,
-        period_length=config.period_length,
+        periods=run_config.horizon,
+        period_length=run_config.period_length,
         objective_value=objective_value,
         schedule_row_counts={"total": len(schedule)},
+        lp_rows=lp_dimensions["lp_rows"],
+        lp_columns=lp_dimensions["lp_columns"],
         per_period_volumes_m3=per_period_volumes_m3,
         per_period_area_ha=per_period_area_ha,
         solve_seconds=solve_seconds,
@@ -380,13 +586,26 @@ def run_ws3(config: WS3RunConfig, verbose: bool = False) -> WS3Result:
     )
 
 
-def run_smoke_test(verbose: bool = True) -> WS3Result:
-    """Deterministic 3-period full-TSA smoke solve (horizon 3, workers 2)."""
+def problem_lp_dimensions(problem: object) -> dict[str, int]:
+    """Return the built Model-I LP row and column counts of a WS3 problem.
 
-    return run_ws3(
-        smoke_config(CANONICAL_TSA29_BRIDGE, Path("outputs/ws3_smoke")),
-        verbose=verbose,
-    )
+    Columns are the decision variables (one per state-tree path); rows are the
+    objective and constraint rows of the built problem.
+    """
+
+    return {
+        "lp_rows": len(problem._constraints),
+        "lp_columns": len(problem._vars),
+    }
+
+
+def run_smoke_test(verbose: bool = True) -> WS3Result:
+    """Deterministic 3-period full-TSA smoke solve on the derived LU-free bridge."""
+
+    output_root = Path("outputs/ws3_smoke")
+    smoke = smoke_config(CANONICAL_TSA29_BRIDGE, output_root)
+    bridge = resolved_bridge_path(smoke)
+    return run_ws3(smoke_config(bridge, output_root), verbose=verbose)
 
 
 def _validate_action_code(bridge: Path, action_code: str) -> None:
@@ -642,21 +861,30 @@ __all__ = [
     "BRIDGE_FILE_PREFIX",
     "BRIDGE_FILE_SUFFIXES",
     "CANONICAL_TSA29_BRIDGE",
+    "CC_MAX_HARVEST_AGE",
+    "CC_MIN_HARVEST_AGE",
     "DEFAULT_AAC_ANNUAL_M3",
     "DEFAULT_AGE_SMASHING_MIDPOINT",
     "DEFAULT_AGE_SMASHING_WIDTH",
     "DEFAULT_EVEN_FLOW_TOLERANCE",
     "DEFAULT_UTILIZATION",
-    "MIN_HARVEST_AGE",
+    "DERIVED_BRIDGE_DIRNAME",
+    "FEMIC_SRC_ROOT",
     "NEVER_MERCHANTABLE_CURVES",
     "SCHEDULE_COLUMNS",
+    "STAGE1_DERIVED_DIRNAME",
+    "STAGE1_FILE_NAMES",
     "WS3Error",
     "aac_ceiling_constraints",
-    "enforce_min_harvest_age",
+    "build_smashed_no_lu_bridge",
+    "derived_bridge_path",
+    "enforce_harvest_age_range",
     "even_flow_constraints",
     "load_full_model",
     "midpoint_age",
     "normalize_status",
+    "problem_lp_dimensions",
+    "resolved_bridge_path",
     "run_smoke_test",
     "run_ws3",
     "smash_initial_inventory_ages",

@@ -173,3 +173,235 @@ def test_ws3_result_summary_is_deterministic(tmp_path: Path) -> None:
     assert result.summary()["status"] == "optimal"
     assert result.summary()["objective_value"] == 1000.0
     assert result.summary()["solve_seconds"] == 1.25
+
+
+def _require_femic_bridge_writer() -> None:
+    """Skip the current test when femic's stage-2 writer is not importable."""
+
+    try:
+        ws3._load_femic_bridge_writer()
+    except ws3.WS3Error as exc:
+        pytest.skip(f"femic bridge writer unavailable: {exc}")
+
+
+def _write_synthetic_stage1(tmp_path: Path) -> Path:
+    """Write a minimal femic stage-1 Woodstock package and return its directory.
+
+    The three area fragments share one ``(tsa, ifm, au_id)`` key but carry two
+    landscape units and raw ages 23/25/27, so the rebuilt bridge must smash all
+    of them to class midpoint 25 and sum them into a single 35 ha ARE row.
+    """
+
+    stage1 = tmp_path / "woodstock"
+    stage1.mkdir()
+    (stage1 / "woodstock_yields.csv").write_text(
+        "tsa,au_id,stratum_code,si_level,ifm,curve_id,age,volume\n"
+        "29,2901000,sbps_pli,high,managed,2921000,0,0.0\n"
+        "29,2901000,sbps_pli,high,managed,2921000,10,50.0\n",
+        encoding="utf-8",
+    )
+    (stage1 / "woodstock_areas.csv").write_text(
+        "stand_id,tsa,au_id,ifm,age,area_ha,landscape_unit_id\n"
+        "1,29,2901000,managed,23,10.0,1375\n"
+        "2,29,2901000,managed,27,20.0,1376\n"
+        "3,29,2901000,managed,25,5.0,1375\n",
+        encoding="utf-8",
+    )
+    (stage1 / "woodstock_actions.csv").write_text(
+        "tsa,au_id,action_id,from_ifm,to_ifm,min_age,max_age,managed_curve_id\n"
+        "29,2901000,cc,managed,managed,0,1000,2921000\n",
+        encoding="utf-8",
+    )
+    (stage1 / "woodstock_transitions.csv").write_text(
+        "tsa,au_id,action_id,from_ifm,to_ifm,next_au_id\n"
+        "29,2901000,cc,managed,managed,2901000\n",
+        encoding="utf-8",
+    )
+    return stage1
+
+
+def _write_canonical_lu_bridge(stage1: Path) -> Path:
+    """Write a canonical bridge stub whose LAN still carries the LU theme."""
+
+    bridge = stage1 / "ws3_bridge"
+    bridge.mkdir()
+    (bridge / "femic_tsa_ws3.lan").write_text(
+        "*THEME Timber Supply Area (TSA)\n"
+        "29\n"
+        "*THEME Managed state\n"
+        "managed\n"
+        "*THEME Analysis Unit (AU)\n"
+        "2901000\n"
+        "*THEME Stratum code\n"
+        "sbps_pli\n"
+        "*THEME Yield curve ID\n"
+        "2921000\n"
+        "*THEME Landscape Unit\n"
+        "1375\n"
+        "1376\n"
+        "*AGGREGATE masc_lu_subset\n"
+        "1375\n",
+        encoding="utf-8",
+    )
+    return bridge
+
+
+def _are_data_lines(bridge: Path) -> list[list[str]]:
+    """Return the whitespace-split ARE data rows of a rebuilt bridge."""
+
+    are_text = (bridge / "femic_tsa_ws3.are").read_text(encoding="utf-8")
+    return [line.split() for line in are_text.splitlines() if line.startswith("*A")]
+
+
+def test_build_smashed_no_lu_bridge_aggregates_duplicate_keys(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    dest = tmp_path / "out" / ws3.DERIVED_BRIDGE_DIRNAME
+
+    built = ws3.build_smashed_no_lu_bridge(stage1, dest)
+
+    assert built == dest
+    rows = _are_data_lines(dest)
+    assert rows == [["*A", "29", "managed", "2901000", "sbps_pli", "2921000", "25", "35.000000"]]
+
+
+def test_build_smashed_no_lu_bridge_smashes_every_age(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    (stage1 / "woodstock_areas.csv").write_text(
+        "stand_id,tsa,au_id,ifm,age,area_ha,landscape_unit_id\n"
+        "1,29,2901000,managed,23,10.0,1375\n"
+        "2,29,2901000,managed,51,20.0,1376\n"
+        "3,29,2901000,managed,109,5.0,1375\n",
+        encoding="utf-8",
+    )
+    dest = tmp_path / "out" / ws3.DERIVED_BRIDGE_DIRNAME
+
+    ws3.build_smashed_no_lu_bridge(stage1, dest)
+
+    ages = [int(row[-2]) for row in _are_data_lines(dest)]
+    assert ages == [25, 55, 105]
+    assert all(age % 10 == 5 for age in ages)
+
+
+def test_build_smashed_no_lu_bridge_writes_five_themes(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    dest = tmp_path / "out" / ws3.DERIVED_BRIDGE_DIRNAME
+
+    ws3.build_smashed_no_lu_bridge(stage1, dest)
+
+    lan_text = (dest / "femic_tsa_ws3.lan").read_text(encoding="utf-8")
+    assert "*THEME Landscape Unit" not in lan_text
+    assert len(ws3._split_theme_blocks(lan_text)) == 5
+    staged = (dest.parent / ws3.STAGE1_DERIVED_DIRNAME / "woodstock_areas.csv").read_text(
+        encoding="utf-8"
+    )
+    assert "landscape_unit_id" not in staged.splitlines()[0]
+
+
+def test_build_smashed_no_lu_bridge_fails_on_incomplete_stage1(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = tmp_path / "woodstock"
+    stage1.mkdir()
+
+    with pytest.raises(ws3.WS3Error) as excinfo:
+        ws3.build_smashed_no_lu_bridge(stage1, tmp_path / "out")
+
+    assert excinfo.value.code == "ws3_stage1_incomplete"
+
+
+def test_resolved_bridge_path_rebuilds_lu_free_bridge(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    canonical = _write_canonical_lu_bridge(stage1)
+    config = WS3RunConfig(
+        run_id="resolve-test",
+        bridge_path=canonical,
+        base_year=2025,
+        horizon=3,
+        output_root=tmp_path / "out",
+    )
+
+    resolved = ws3.resolved_bridge_path(config)
+
+    assert resolved == ws3.derived_bridge_path(tmp_path / "out")
+    lan_text = (resolved / "femic_tsa_ws3.lan").read_text(encoding="utf-8")
+    assert "*THEME Landscape Unit" not in lan_text
+    assert all(int(row[-2]) % 10 == 5 for row in _are_data_lines(resolved))
+
+
+def test_resolved_bridge_path_passes_through_derived_bridge(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    canonical = _write_canonical_lu_bridge(stage1)
+    config = WS3RunConfig(
+        bridge_path=canonical,
+        base_year=2025,
+        horizon=3,
+        output_root=tmp_path / "out",
+    )
+    derived = ws3.resolved_bridge_path(config)
+
+    resolved = ws3.resolved_bridge_path(config.model_copy(update={"bridge_path": derived}))
+
+    assert resolved == derived
+
+
+class _StubDevelopmentType:
+    """Minimal ws3 DevelopmentType stand-in with the enforced attributes."""
+
+    def __init__(self, curve_id: str) -> None:
+        self.key = ("29", "managed", "2901000", "sbps_pli", curve_id)
+        self.oper_expr = {"cc": ["_age >= 0 and _age <= 1000"]}
+
+
+class _StubModel:
+    """Minimal ws3 ForestModel stand-in tracking action compilation."""
+
+    def __init__(self, development_types: list[_StubDevelopmentType]) -> None:
+        self.dtypes = {index: dt for index, dt in enumerate(development_types)}
+        self.compile_calls = 0
+
+    def compile_actions(self) -> None:
+        self.compile_calls += 1
+
+
+def test_enforce_harvest_age_range_applies_60_to_300_bounds() -> None:
+    merchantable = _StubDevelopmentType("2901000")
+    never_merchantable = _StubDevelopmentType("2921000")
+    model = _StubModel([merchantable, never_merchantable])
+
+    summary = ws3.enforce_harvest_age_range(model)
+
+    assert merchantable.oper_expr["cc"] == ["_age >= 60 and _age <= 300"]
+    assert "cc" not in never_merchantable.oper_expr
+    assert summary["min_harvest_age"] == 60
+    assert summary["max_harvest_age"] == 300
+    assert summary["oper_expr_popped"] == 1
+    assert summary["oper_expr_rewritten"] == 1
+    assert model.compile_calls == 1
+
+
+def test_enforce_harvest_age_range_skips_types_without_the_action() -> None:
+    no_cc = _StubDevelopmentType("2901000")
+    no_cc.oper_expr = {}
+    model = _StubModel([no_cc])
+
+    summary = ws3.enforce_harvest_age_range(model)
+
+    assert "cc" not in no_cc.oper_expr
+    assert summary["oper_expr_popped"] == 0
+    assert summary["oper_expr_rewritten"] == 0
+    assert model.compile_calls == 1
+
+
+def test_problem_lp_dimensions_counts_rows_and_columns() -> None:
+    class _StubProblem:
+        _constraints = {"a": 1, "b": 2}
+        _vars = {"x": 1, "y": 2, "z": 3}
+
+    assert ws3.problem_lp_dimensions(_StubProblem()) == {
+        "lp_rows": 2,
+        "lp_columns": 3,
+    }

@@ -88,7 +88,9 @@ def ws3_run(
     try:
         config = ws3.WS3RunConfig.read(config_path)
         if smoke:
-            config = ws3.smoke_config(config.bridge_path, Path("outputs/ws3_smoke"))
+            output_root = Path("outputs/ws3_smoke")
+            bridge = ws3.resolved_bridge_path(config)
+            config = ws3.smoke_config(bridge, output_root)
         result = ws3.run_ws3(config)
     except Exception as exc:
         diagnostic = Diagnostic(

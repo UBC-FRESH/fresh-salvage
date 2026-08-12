@@ -5,6 +5,15 @@
 # this repository; this example simply points a local run at them. Replace the
 # path with your own validated bridge before running.
 #
+# The pipeline rebuilds a Landscape-Unit-free bridge from bridge_path before
+# compiling the model: fresh_salvage.ws3.build_smashed_no_lu_bridge reads the
+# femic stage-1 Woodstock CSVs (siblings of the canonical bridge), drops the
+# landscape_unit_id column at the source, smashes every fragment age to its
+# 10-year class midpoint, and lets femic's own stage-2 writer aggregate area
+# over the unique (tsa, ifm, au, stratum, curve, age) keys. Point this at the
+# canonical 6-theme bridge; the rebuilt workspace is materialized under
+# output_root/derived/ws3_bridge_no_lu and the model is compiled from it.
+#
 # Production profile (horizon 30, workers 64):
 #   fresh-salvage ws3-run examples/ws3_tsa29.yaml
 #

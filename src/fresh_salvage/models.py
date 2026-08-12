@@ -269,6 +269,8 @@ class WS3Manifest(BaseModel):
     periods: int = Field(ge=0)
     objective_value: float = Field(ge=0.0)
     schedule_rows: int = Field(ge=0)
+    lp_rows: int = Field(default=0, ge=0)
+    lp_columns: int = Field(default=0, ge=0)
     solve_seconds: float = Field(ge=0.0)
     bridge_checksums: dict[str, str] = Field(default_factory=dict)
     config: dict[str, object] = Field(default_factory=dict)
@@ -379,6 +381,8 @@ class WS3Result(BaseModel):
     period_length: int = 10
     objective_value: float = Field(ge=0.0)
     schedule_row_counts: dict[str, int] = Field(default_factory=dict)
+    lp_rows: int = Field(default=0, ge=0)
+    lp_columns: int = Field(default=0, ge=0)
     per_period_volumes_m3: dict[str, float] = Field(default_factory=dict)
     per_period_area_ha: dict[str, float] = Field(default_factory=dict)
     solve_seconds: float = Field(ge=0.0)
