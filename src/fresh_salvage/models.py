@@ -141,7 +141,7 @@ class Stand(BaseModel):
     """One polygon stand with derived volumes and economics.
 
     Boundary record for downstream phases; produced from an ingested stand
-    frame by :func:`masc_yunhao_xu_linear.data.stands_from_frame`.
+    frame by :func:`fresh_salvage.data.stands_from_frame`.
     """
 
     feature_id: str

@@ -1,11 +1,11 @@
 cff-version: 1.2.0
-message: "If you use masc-yunhao-xu-linear, please cite the software repository."
-title: "masc-yunhao-xu-linear"
+message: "If you use fresh-salvage, please cite the software repository."
+title: "fresh-salvage"
 abstract: "Linear principal-agent salvage-subsidy model for TSA29 Williams Lake timber supply (WS3 + HiGHS)."
 authors:
   - name: "UBC FRESH Lab"
-repository-code: "https://github.com/UBC-FRESH/masc-yunhao-xu-linear"
-url: "https://github.com/UBC-FRESH/masc-yunhao-xu-linear"
+repository-code: "https://github.com/UBC-FRESH/fresh-salvage"
+url: "https://github.com/UBC-FRESH/fresh-salvage"
 license: "MIT"
 version: "0.1.0a1"
 date-released: "2026-08-12"

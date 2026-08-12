@@ -1,7 +1,7 @@
-masc-yunhao-xu-linear
-=====================
+fresh-salvage
+=============
 
-``masc-yunhao-xu-linear`` is a clean-reboot linear implementation of the
+``fresh-salvage`` is a clean-reboot linear implementation of the
 principal-agent salvage-subsidy model for the Williams Lake Timber Supply Area
 (TSA29), British Columbia. It replaces the predecessor Gurobi binary models with
 pure-HiGHS linear programs and adds full-TSA WS3 schedule integration and an

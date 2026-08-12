@@ -45,7 +45,7 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: masc-yunhao-xu-linear-dist
+          name: fresh-salvage-dist
           path: dist/*
 
   publish:
@@ -62,7 +62,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
-          name: masc-yunhao-xu-linear-dist
+          name: fresh-salvage-dist
           path: dist
 
       - name: Publish package distributions to TestPyPI

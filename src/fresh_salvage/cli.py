@@ -1,4 +1,4 @@
-"""Command-line interface for masc-yunhao-xu-linear."""
+"""Command-line interface for fresh-salvage."""
 
 import json
 from pathlib import Path
@@ -8,8 +8,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from masc_yunhao_xu_linear import __version__, data
-from masc_yunhao_xu_linear.models import Diagnostic, IngestResult, ScenarioRunConfig
+from fresh_salvage import __version__, data
+from fresh_salvage.models import Diagnostic, IngestResult, ScenarioRunConfig
 
 app = typer.Typer(
     add_completion=False,
@@ -20,7 +20,7 @@ console = Console()
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"masc-yunhao-xu-linear {__version__}")
+        console.print(f"fresh-salvage {__version__}")
         raise typer.Exit()
 
 
@@ -36,7 +36,7 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """masc-yunhao-xu-linear command-line interface."""
+    """fresh-salvage command-line interface."""
 
 
 @app.command()

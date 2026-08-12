@@ -6,7 +6,7 @@
 # with your own copy of WL_VFSL.csv before running.
 #
 # Run from the repository root:
-#   masc-yunhao-xu-linear ingest examples/scenario_tsa29.yaml
+#   fresh-salvage ingest examples/scenario_tsa29.yaml
 run_id: tsa29-full
 inputs:
   wl_vfsl_path: /srv/shared-data/gep/jupyterhub07-projects/davis/masc-yunhao-xu/Gurobi/Rolling_horizon_structure/WL_VFSL.csv

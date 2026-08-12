@@ -1,6 +1,6 @@
-# masc-yunhao-xu-linear
+# fresh-salvage
 
-`masc-yunhao-xu-linear` is an early public-alpha Python package implementing a
+`fresh-salvage` is an early public-alpha Python package implementing a
 clean-reboot, pure-HiGHS linear version of the principal-agent
 salvage-subsidy model for the Williams Lake Timber Supply Area (TSA29), British
 Columbia.
@@ -13,9 +13,9 @@ HiGHS, drops the 11-landscape-unit subset in favour of the full TSA, adds an
 annual fire simulation with development-type burn rates (`1/MFRI`), and wraps
 the whole pipeline in a rolling-horizon principal-agent coordination loop.
 
-Documentation: https://ubc-fresh.github.io/masc-yunhao-xu-linear/
+Documentation: https://ubc-fresh.github.io/fresh-salvage/
 
-Repository: https://github.com/UBC-FRESH/masc-yunhao-xu-linear
+Repository: https://github.com/UBC-FRESH/fresh-salvage
 
 ## Statement Of Need
 
@@ -37,7 +37,7 @@ a modelled state rather than a static input.
 Supported in `0.1.0a1`:
 
 - Python package skeleton using `src/` layout;
-- minimal `masc-yunhao-xu-linear` command-line interface with stub commands;
+- minimal `fresh-salvage` command-line interface with stub commands;
 - strict roadmap, changelog, planning, and governance workflow;
 - Sphinx documentation;
 - CI, documentation, and release-artifact workflows;
@@ -81,19 +81,19 @@ twine check dist/*
 ## Command Line
 
 ```bash
-masc-yunhao-xu-linear --version
-masc-yunhao-xu-linear --help
+fresh-salvage --version
+fresh-salvage --help
 ```
 
 Phase 1 ships stub commands that fail fast with a not-implemented diagnostic:
 
 ```bash
-masc-yunhao-xu-linear ingest
-masc-yunhao-xu-linear ws3-run
-masc-yunhao-xu-linear solve-principal
-masc-yunhao-xu-linear solve-agent
-masc-yunhao-xu-linear rh-run
-masc-yunhao-xu-linear export
+fresh-salvage ingest
+fresh-salvage ws3-run
+fresh-salvage solve-principal
+fresh-salvage solve-agent
+fresh-salvage rh-run
+fresh-salvage export
 ```
 
 Each stub accepts `--json` for deterministic diagnostic output.

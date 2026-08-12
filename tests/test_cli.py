@@ -6,8 +6,8 @@ from pathlib import Path
 import pandas as pd
 from typer.testing import CliRunner
 
-from masc_yunhao_xu_linear import __version__, data
-from masc_yunhao_xu_linear.cli import app
+from fresh_salvage import __version__, data
+from fresh_salvage.cli import app
 
 runner = CliRunner()
 
@@ -23,7 +23,7 @@ def test_cli_version() -> None:
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert f"masc-yunhao-xu-linear {__version__}" in result.stdout
+    assert f"fresh-salvage {__version__}" in result.stdout
 
 
 def test_cli_stub_command_fails_fast() -> None:

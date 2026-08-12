@@ -1,7 +1,7 @@
 Installation
 ============
 
-``masc-yunhao-xu-linear`` is not yet published to an index. For source-checkout
+``fresh-salvage`` is not yet published to an index. For source-checkout
 development, use a repo-local virtual environment and an editable install.
 
 Linux and macOS
@@ -29,8 +29,8 @@ Smoke Check
 
 .. code-block:: bash
 
-   masc-yunhao-xu-linear --help
-   masc-yunhao-xu-linear --version
+   fresh-salvage --help
+   fresh-salvage --version
 
 Alpha Boundary
 --------------

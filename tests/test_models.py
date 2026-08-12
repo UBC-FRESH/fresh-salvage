@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from masc_yunhao_xu_linear.models import (
+from fresh_salvage.models import (
     ARTIFACT_DIRECTORIES,
     ArtifactLayout,
     DevelopmentType,

@@ -6,8 +6,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from masc_yunhao_xu_linear import data
-from masc_yunhao_xu_linear.models import IngestManifest, ScenarioInputs, ScenarioRunConfig
+from fresh_salvage import data
+from fresh_salvage.models import IngestManifest, ScenarioInputs, ScenarioRunConfig
 
 # Canonical 11-LU subset used by the predecessor (must NOT filter the output).
 PREDECESSOR_11_LANDSCAPE_UNITS = {

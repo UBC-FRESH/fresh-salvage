@@ -4,7 +4,7 @@ This file is the working contract for AI coding agents in this repository.
 
 ## Project Purpose
 
-`masc-yunhao-xu-linear` exists to re-implement the principal-agent
+`fresh-salvage` exists to re-implement the principal-agent
 salvage-subsidy model for the Williams Lake Timber Supply Area (TSA29) as a
 pure-HiGHS linear pipeline. The goal is not to port the predecessor Gurobi
 script bodies. The goal is to rebuild the model so the durable source of truth
@@ -24,7 +24,7 @@ This repository has completed the Phase 0 bootstrap scaffold. It contains:
 - `CHANGE_LOG.md`: append-only project narrative.
 - `planning/`: focused design notes and research records.
 - `pyproject.toml`: package metadata and optional dependency groups.
-- `src/masc_yunhao_xu_linear/`: importable package code with CLI stubs and
+- `src/fresh_salvage/`: importable package code with CLI stubs and
   module placeholders.
 - `tests/`: package-backed tests for package metadata and CLI behavior.
 - `docs/`: Sphinx documentation skeleton.

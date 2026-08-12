@@ -1,6 +1,6 @@
 # Contributing
 
-`masc-yunhao-xu-linear` is pre-release research software from the UBC FRESH Lab.
+`fresh-salvage` is pre-release research software from the UBC FRESH Lab.
 Contributions should keep the repository public-safe, reproducible, and aligned
 with the active roadmap phase.
 

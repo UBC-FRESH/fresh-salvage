@@ -1,7 +1,7 @@
 """Linear principal-agent salvage-subsidy pipeline for TSA29 Williams Lake."""
 
-from masc_yunhao_xu_linear.data import ingest
-from masc_yunhao_xu_linear.models import ArtifactLayout, ScenarioRunConfig, Stand
+from fresh_salvage.data import ingest
+from fresh_salvage.models import ArtifactLayout, ScenarioRunConfig, Stand
 
 __version__ = "0.1.0a1"
 

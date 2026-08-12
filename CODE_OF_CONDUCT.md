@@ -1,6 +1,6 @@
 # Code Of Conduct
 
-`masc-yunhao-xu-linear` follows the UBC FRESH Lab expectation that project
+`fresh-salvage` follows the UBC FRESH Lab expectation that project
 spaces remain professional, respectful, and focused on constructive scientific
 and engineering work.
 

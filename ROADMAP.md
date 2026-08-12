@@ -1,4 +1,4 @@
-# masc-yunhao-xu-linear Roadmap
+# fresh-salvage Roadmap
 
 This roadmap is the current project plan and issue tracker map. Keep it
 synchronized with GitHub issues, planning notes, pull requests, and
@@ -24,7 +24,7 @@ Branch: `feature/p0-skeleton-scaffold`
 
 Status: complete
 
-Goal: establish `masc-yunhao-xu-linear` as a public package-backed UBC-FRESH
+Goal: establish `fresh-salvage` as a public package-backed UBC-FRESH
 project with strict governance, planning, docs, CI, release-artifact checks, a
 minimal importable Python package, and stub CLI commands.
 
@@ -53,7 +53,7 @@ Phase 0 local verification passed with:
 - `python -m pip install -e .[dev]`
 - `python -m ruff check .`
 - `python -m pytest`
-- `masc-yunhao-xu-linear --help`
+- `fresh-salvage --help`
 
 ## Phase 1: Data Ingestion And Typed Input Records
 

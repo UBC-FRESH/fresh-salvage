@@ -1,7 +1,7 @@
 Architecture
 ============
 
-``masc-yunhao-xu-linear`` implements a linear principal-agent salvage-subsidy
+``fresh-salvage`` implements a linear principal-agent salvage-subsidy
 pipeline for the Williams Lake Timber Supply Area (TSA29). The predecessor
 Gurobi binary models (``P_RH_Version.py``, ``A_RH_Version.py``, and the binary
 ``Version 2.py`` / ``Version3.3.py`` scripts) are re-implemented as continuous

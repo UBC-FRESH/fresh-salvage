@@ -2,7 +2,7 @@
 
 ## 0.1.0a1
 
-`masc-yunhao-xu-linear` `0.1.0a1` is the initial scaffold of the clean-reboot
+`fresh-salvage` `0.1.0a1` is the initial scaffold of the clean-reboot
 linear principal-agent salvage-subsidy pipeline. It establishes the package
 skeleton, governance, planning contract, docs, automation, and stub CLI
 commands. No model logic is implemented in this release.
@@ -11,7 +11,7 @@ commands. No model logic is implemented in this release.
 
 - Package-backed Python project using `src/` layout and versioned package
   metadata.
-- Typer CLI with `masc-yunhao-xu-linear --version`, `--help`, and stub
+- Typer CLI with `fresh-salvage --version`, `--help`, and stub
   commands `ingest`, `ws3-run`, `solve-principal`, `solve-agent`, `rh-run`,
   and `export`.
 - Module stubs for `models`, `data`, `ws3`, `principal`, `agent`, `fire`,
@@ -36,4 +36,4 @@ The release is expected to pass:
 - `python -m pip install -e .[dev]`
 - `python -m ruff check .`
 - `python -m pytest`
-- `masc-yunhao-xu-linear --help`
+- `fresh-salvage --help`

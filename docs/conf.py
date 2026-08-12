@@ -1,4 +1,4 @@
-"""Sphinx configuration for masc-yunhao-xu-linear."""
+"""Sphinx configuration for fresh-salvage."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from masc_yunhao_xu_linear import __version__  # noqa: E402
+from fresh_salvage import __version__  # noqa: E402
 
-project = "masc-yunhao-xu-linear"
+project = "fresh-salvage"
 author = "UBC FRESH Lab"
 copyright = "2026, UBC FRESH Lab"
 version = __version__
@@ -21,4 +21,4 @@ extensions = [
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 html_theme = "sphinx_rtd_theme"
-html_title = "masc-yunhao-xu-linear"
+html_title = "fresh-salvage"

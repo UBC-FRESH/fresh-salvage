@@ -49,3 +49,10 @@ completion and GitHub issue comments.
     `Moderate` at the boundary instead of silently treating it as unburned.
     All 12 BEC zones present in the layer are retained (no zone filtering).
 
+## 2026-08-12
+
+- Repo renamed `masc-yunhao-xu-linear` -> `fresh-salvage`: GitHub repository,
+  local directory, Python package import name (`masc_yunhao_xu_linear` ->
+  `fresh_salvage`), and console script (`masc-yunhao-xu-linear` ->
+  `fresh-salvage`).
+
