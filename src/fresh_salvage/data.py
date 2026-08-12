@@ -126,10 +126,17 @@ UNKNOWN_SEVERITY_FRAC = 0.0
 COVERAGE_NUMERATOR_COLUMN = "SHAPE_Area_1"
 COVERAGE_DENOMINATOR_COLUMN = "FEATURE_AREA_SQM"
 
-# Grade transition for burned timber: sawlog/peeler degrade to pulpwood.
+# Grade transition for burned timber in the fresh/prompt-salvage regime
+# (year 1-3 after the kill). Red-stage evidence (Plank 1984; Loeffler &
+# Anderson 2018): fire-killed stands retain most of their grade in the first
+# 1-2 years (sawlog share 85% -> 73%, lumber value -10%), so year-1 sawlog
+# retention is ~0.80; checking loss is already priced by
+# BURNED_PRICE_DISCOUNT (0.65). The grey-stage (5-10 yr) collapse to pulp is
+# handled by the 0.85/yr burned-inventory decay — putting it in the initial
+# mix would double-count the time decay.
 BURNED_GRADE_TRANSITION = {
-    "Sawlog": {"Sawlog": 0.40, "Peeler": 0.05, "Pulpwood": 0.55},
-    "Peeler": {"Sawlog": 0.0, "Peeler": 0.20, "Pulpwood": 0.80},
+    "Sawlog": {"Sawlog": 0.80, "Peeler": 0.10, "Pulpwood": 0.10},
+    "Peeler": {"Sawlog": 0.35, "Peeler": 0.55, "Pulpwood": 0.10},
     "Pulpwood": {"Sawlog": 0.0, "Peeler": 0.0, "Pulpwood": 1.0},
 }
 
@@ -159,9 +166,11 @@ SUBSIDY_RATE_PER_M3 = 3.0
 GREEN_STUMPAGE_RATE = 15.0
 BURNED_STUMPAGE_RATE = 0.25
 GREEN_HARVEST_COST = 45.0
-BURNED_HARVEST_COST = 61.0
+# Burned premiums are +25% over green for the mild, recently-killed case
+# (prompt year-1-3 salvage): 45 x 1.25 = 56.25 -> 56; 30 x 1.25 = 37.5 -> 38.
+BURNED_HARVEST_COST = 56.0
 TRANSPORT_COST_PER_M3 = 30.0
-BURNED_TRANSPORT_COST_PER_M3 = 41.0
+BURNED_TRANSPORT_COST_PER_M3 = 38.0
 
 # Green prices ($/m3 FOB mill; BC Interior Log Market Report Q4-2023 anchors,
 # peeler = sawlog x 1.15 assumption, pulp at the market pulpwood level).

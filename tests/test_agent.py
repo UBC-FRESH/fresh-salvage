@@ -5,7 +5,7 @@ data is read. ``_solve`` wraps ``solve_agent`` with all cohorts fully offered
 unless the test says otherwise. Margins below use the calibrated ``data.py``
 constants (planning/economics-calibration.md): green margin = green_price -
 45 (harvest) - 30 (transport) - 15 (stumpage); salvage margin = burned_price
-- 61 (harvest) - 41 (transport) - 0.25 (stumpage) + 3 (subsidy).
+- 56 (harvest) - 38 (transport) - 0.25 (stumpage) + 3 (subsidy).
 """
 
 import hashlib
@@ -68,11 +68,27 @@ def _actions(result):
 def test_calibrated_margin_decomposition_spf_basis() -> None:
     """Pin the calibrated margin decomposition (planning/economics-calibration.md).
 
-    On the SPF sawlog price basis (green 127 $/m3, burned 127 x 0.65 =
-    82.55 $/m3): green margin = 127 - 45 - 30 - 15 = +37 $/m3 and the
-    UNSUBSIDIZED salvage margin = 82.55 - 61 - 41 - 0.25 = -19.7 $/m3 —
-    fire-killed wood is a net cost to recover without the subsidy, which is
-    the behavioral property the recalibration was required to produce.
+    Three SPF price bases, all derived from the ``data.py`` constants:
+
+    - sawlog basis (a burned sawlog sold as a sawlog): burned price
+      127 x 0.65 = 82.55 $/m3, salvage margin 82.55 - 56 - 38 - 0.25 =
+      -11.70 $/m3;
+    - transition mix (the expected realized price of a green sawlog after
+      burn degradation through ``BURNED_GRADE_TRANSITION``):
+      0.65 x (0.80 x 127 + 0.10 x 146 + 0.10 x 55) = 79.105 $/m3, margin
+      79.105 - 56 - 38 - 0.25 = -15.145 $/m3 — the headline ~-15 $/m3
+      prompt-salvage basis;
+    - development-type mix (the agent LP's actual cohort price: the SPF
+      grade split pushed through the full transition matrix): destination
+      shares saw 0.805 x 0.80 + 0.092 x 0.35 = 0.6762, peel
+      0.805 x 0.10 + 0.092 x 0.55 = 0.1311, pulp 0.805 x 0.10 + 0.092 x 0.10
+      + 0.103 = 0.1927, price 0.65 x (0.6762 x 127 + 0.1311 x 146
+      + 0.1927 x 55) = 75.15 $/m3, margin -19.10 $/m3.
+
+    Fire-killed wood is a net cost to recover without the subsidy on every
+    basis — the behavioral property the recalibration was required to
+    produce — but the gap is now moderate (low-to-mid teens on the prompt
+    sawlog stream), so the minimum-subsidy question stays genuinely open.
     """
 
     green_margin = (
@@ -83,22 +99,56 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
     )
     assert green_margin == pytest.approx(37.0)
 
+    burned_costs = (
+        data.BURNED_HARVEST_COST
+        + data.BURNED_TRANSPORT_COST_PER_M3
+        + data.BURNED_STUMPAGE_RATE
+    )
+    assert burned_costs == pytest.approx(94.25)
+
+    # Sawlog basis: a burned sawlog sold as a sawlog.
     burned_price = data.GREEN_PRICES["SPF_Sawlog"] * data.BURNED_PRICE_DISCOUNT
     assert burned_price == pytest.approx(82.55)
-    salvage_margin = (
-        burned_price
-        - data.BURNED_HARVEST_COST
-        - data.BURNED_TRANSPORT_COST_PER_M3
-        - data.BURNED_STUMPAGE_RATE
+    assert burned_price - burned_costs == pytest.approx(-11.70)
+
+    # Transition mix: expected realized price of a green sawlog after burn
+    # degradation (the ~-15 $/m3 prompt-salvage headline).
+    transition = data.BURNED_GRADE_TRANSITION["Sawlog"]
+    transition_price = data.BURNED_PRICE_DISCOUNT * (
+        transition["Sawlog"] * data.GREEN_PRICES["SPF_Sawlog"]
+        + transition["Peeler"] * data.GREEN_PRICES["SPF_Peelers"]
+        + transition["Pulpwood"] * data.GREEN_PRICES["SPF_Pulpwood"]
     )
-    assert salvage_margin == pytest.approx(-19.7)
+    assert transition_price == pytest.approx(79.105)
+    assert transition_price - burned_costs == pytest.approx(-15.145)
+
+    # Development-type mix: the agent LP's actual volume-weighted SPF price
+    # (the species grade split pushed through the full transition matrix).
+    splits = data.SPECIES_GRADE_SPLIT["SPF"]
+    destination_share = {
+        grade_out: sum(
+            splits[grade_in] * data.BURNED_GRADE_TRANSITION[grade_in][grade_out]
+            for grade_in in splits
+        )
+        for grade_out in ("Sawlog", "Peeler", "Pulpwood")
+    }
+    assert destination_share["Sawlog"] == pytest.approx(0.6762)
+    assert destination_share["Peeler"] == pytest.approx(0.1311)
+    assert destination_share["Pulpwood"] == pytest.approx(0.1927)
+    dt_price = data.BURNED_PRICE_DISCOUNT * sum(
+        destination_share[grade_out]
+        * data.GREEN_PRICES[f"SPF_{data.GRADE_COLUMN_SUFFIX[grade_out]}"]
+        for grade_out in destination_share
+    )
+    assert dt_price == pytest.approx(75.150725)
+    assert dt_price - burned_costs == pytest.approx(-19.099275)
 
 
 def test_unsubsidized_salvage_is_not_economic_at_calibrated_costs() -> None:
     """At subsidy 0 the agent never salvages on the SPF sawlog basis.
 
     The cohort cannot be green-harvested profitably (green price 0), so fire
-    influx accumulates every year; with the salvage margin at -19.7 $/m3 the
+    influx accumulates every year; with the salvage margin at -11.7 $/m3 the
     agent still leaves all of it to decay.
     """
 
@@ -123,7 +173,7 @@ def test_unsubsidized_salvage_is_not_economic_at_calibrated_costs() -> None:
 
 
 def test_subsidy_above_the_margin_gap_flips_salvage_on() -> None:
-    """A 25 $/m3 subsidy turns the -19.7 $/m3 margin into +5.3 $/m3.
+    """A 25 $/m3 subsidy turns the -11.7 $/m3 margin into +13.3 $/m3.
 
     The same cohort as above now salvages each year's fire influx
     immediately (0.5 of standing volume in year 1, 0.25 in year 2).
@@ -144,8 +194,8 @@ def test_subsidy_above_the_margin_gap_flips_salvage_on() -> None:
     result = _solve(cohorts, horizon=2, economics=Economics(subsidy_rate_per_m3=25.0))
     actions = _actions(result)
 
-    margin = 82.55 - 61.0 - 41.0 - 0.25 + 25.0
-    assert margin == pytest.approx(5.3)
+    margin = 82.55 - 56.0 - 38.0 - 0.25 + 25.0
+    assert margin == pytest.approx(13.3)
     assert actions[("c1", 1)][1] == pytest.approx(0.5)
     assert actions[("c1", 2)][1] == pytest.approx(0.25)
     assert result.objective_value == pytest.approx(
@@ -179,7 +229,7 @@ def test_discounting_prefers_the_earliest_harvest_year() -> None:
 
 
 def test_salvage_is_limited_to_the_on_hand_burned_inventory() -> None:
-    # Green margin negative (50 - 90), salvage margin positive (130 - 99.25):
+    # Green margin negative (50 - 90), salvage margin positive (130 - 91.25):
     # the agent waits for fire and salvages each year's influx immediately.
     cohorts = [
         _cohort("c1", standing_volume_m3=1.0, burn_rate=0.5, green_price_m3=50.0)
@@ -190,7 +240,7 @@ def test_salvage_is_limited_to_the_on_hand_burned_inventory() -> None:
 
     assert actions[("c1", 1)][1] == pytest.approx(0.5)  # the year-1 influx binds
     assert actions[("c1", 2)][1] == pytest.approx(0.25)  # 0.5 * live remainder 0.5
-    margin = 130.0 - 61.0 - 41.0 - 0.25 + 3.0
+    margin = 130.0 - 56.0 - 38.0 - 0.25 + 3.0
     expected = margin * (0.5 / 1.03 + 0.25 / 1.03**2)
     assert result.objective_value == pytest.approx(expected)
     # Salvage empties the burned inventory every year.
@@ -205,7 +255,7 @@ def test_harvest_removes_volume_from_that_years_burn_exposure() -> None:
 
     result = _solve(cohorts, horizon=2)
 
-    # Green margin (110) beats the salvage margin (30.75), so the whole cohort
+    # Green margin (110) beats the salvage margin (38.75), so the whole cohort
     # is harvested in year 1 and nothing is left exposed to the year-1 fire.
     assert result.decisions[0].harvest_fraction == pytest.approx(1.0)
     assert result.per_year_volumes[0].burn_influx_m3 == pytest.approx(

@@ -150,7 +150,7 @@ at any non-negative subsidy. That margin (≈ +$93/m3 for standing fire-killed
 wood, unsubsidized) is not credible for the BC Interior, and it triggered
 the economic recalibration below.
 
-## Economic recalibration (2026-08-12, supersedes the flat-subsidy finding)
+## Economic recalibration (2026-08-12, supersedes the flat-subsidy finding; superseded in turn by the prompt-salvage adjustment below)
 
 All economic parameters were recalibrated against BC anchors and threaded
 through a config-visible `Economics` surface (ingestion scenario section,
@@ -247,6 +247,157 @@ The subsidy is now a real behavioral instrument with a sharp flip at
 calibrated interior cost structure makes fire-killed, pulp-degraded wood a
 net recovery cost absent substantial support.
 
+## Prompt-salvage adjustment (2026-08-12, supersedes the ≈48 $/m3 flip)
+
+User verdict on the ≈48 $/m3 flip: DISTRACTINGLY LARGE — at that gap the
+subsidy cost of a flip is obviously several times the benefit NPV, so the
+minimum-subsidy question is no longer genuinely open. Cause: the first
+recalibration's `BURNED_GRADE_TRANSITION` sent 55% of burned saw volume to
+pulpwood at year 0 — a grey-stage (5–10 yr post-fire) outcome — while the
+0.85/yr burned-inventory decay already removes grey-stage volume, charging
+the time decay twice. The adjustment retargets the economics to the
+FRESH/PROMPT-SALVAGE regime (year 1–3), the regime a subsidy program
+actually operates in (`planning/economics-calibration.md`):
+
+- `BURNED_GRADE_TRANSITION`: year-1 sawlog retention 0.40 -> 0.80 for every
+  species group (Plank 1984; Loeffler & Anderson 2018 red-stage evidence:
+  sawlog share 85% -> 73% over years 1–2, lumber value −10%; checking loss
+  is already in the 0.65 price discount). Sawlog -> {Saw 0.80, Peel 0.10,
+  Pulp 0.10}; Peeler -> {Peel 0.55, Saw 0.35, Pulp 0.10}; Pulpwood stays
+  Pulpwood 1.0. The grey-stage collapse stays in the decay term.
+- Burned cost premium +35% -> +25% (mild, recently-killed case):
+  `BURNED_HARVEST_COST` 61 -> 56, `BURNED_TRANSPORT_COST_PER_M3` 41 -> 38.
+- Green prices/costs/stumpage unchanged.
+
+### Post-adjustment margins
+
+Stands-table development-type (DT) economics after re-ingestion (the
+agent LP's volume-weighted cohort prices; burned costs now 56 + 38 + 0.25
+= 94.25 $/m3):
+
+| Development type | Burned price ($/m3) | Margin @ subsidy 0 | Breakeven subsidy |
+| --- | --- | --- | --- |
+| Cedar_ESSF | 78.71 | −15.54 | 15.54 |
+| Cedar_ICH | 77.80 | −16.45 | 16.45 |
+| SPF_ESSF | 75.16 | −19.09 | 19.09 |
+| SPF_MS | 75.15 | −19.10 | 19.10 |
+| SPF_IDF | 74.88 | −19.37 | 19.37 |
+| SPF_SBPS | 74.85 | −19.40 | 19.40 |
+| Hem-Bal_ICH | 74.66 | −19.59 | 19.59 |
+| SPF_ICH | 74.01 | −20.24 | 20.24 |
+| Other_MS | 67.35 | −26.90 | 26.90 |
+| Other_ICH | 66.52 | −27.73 | 27.73 |
+| Other_SBPS | 64.94 | −29.31 | 29.31 |
+| Other_IDF | 63.93 | −30.32 | 30.32 |
+
+The unsubsidized burned-wood marginal benefit is a MODERATE negative band
+(−15.5 to −30.3 $/m3; SPF ≈ −19.1): neither trivially small nor
+distractingly large. Note the heterogeneity is DT-level, not pure-species:
+secondary species slots dilute the leading-species price (Cedar DTs price
+below the pure-cedar 84.33 $/m3 mix; Other DTs price above the pure-Other
+58.50 $/m3 basket).
+
+### Re-run evidence (post-adjustment)
+
+- Ingestion: re-run (34.7 s) because the stands table's `B_*_Vol` grade
+  columns embed the transition; 246,957 stands, source sha256 unchanged
+  (`649f8c61...`). Verified UNAFFECTED, row-identical: `green_prices`,
+  `burned_prices`, `Total_Green_Vol` (19,773,448.62 m3),
+  `Total_Burned_Vol` (79,087.38 m3). Changed as intended: the `B_*` grade
+  split (SPF burned sawlog share 0.322 -> 0.6762; SPF DT burned price
+  54.29 -> 75.15 $/m3). The manifest echoes the new transition and costs.
+- WS3 smoke regression: objective **24,328,759.75 m3**, bit-identical (WS3
+  consumes the bridge, not the stands table).
+- 100-year RH dev run (`outputs/rh_100yr_calib`, default subsidy 3.0,
+  workers 64, 154.9 s, optimal): decadal green 4.849/4.569/4.238/3.979/
+  3.717/3.479/3.217/2.982/2.726/2.494 M m3 (total 36,249,151.9 m3);
+  **decadal burned salvage 0.00 m3 in every decade** (total 0.00) — the
+  expectation at subsidy 3.0, since the smallest DT margin (Cedar_ESSF
+  −15.54 + 3.0) stays negative. ~201 kha/decade still burns.
+  Pre-adjustment calib run: green 36,250,960.9, salvage 0.00 — the
+  −1,809.0 m3 green delta (−0.005%) is the principal's offer LP repricing
+  `burned_value` off the new grade mix, inside the known WS3
+  workers-sensitivity band (see the determinism caveat).
+
+### Post-adjustment flip curve
+
+Prescribed sweep (`outputs/ensemble_flip_calib`, 26/26 optimal, wall
+151.8 s): `subsidy_rate_per_m3` in {0, 5, 8, 10, 12, 14, 15, 16, 18, 20,
+22, 25, 30} x `burn_rate_multiplier` in {0.0, 1.0}, per-scenario WS3
+workers 1, max_workers 64. Total burned salvage (m3, 100 implemented
+years):
+
+| Subsidy ($/m3) | Burn x0.0 | Burn x1.0 | Step-1 salvage, burn x1.0 |
+| --- | --- | --- | --- |
+| 0 | 0.00 | 0.00 | 0.00 |
+| 5 | 0.00 | 0.00 | 0.00 |
+| 8 | 0.00 | 0.00 | 0.00 |
+| 10 | 0.00 | 0.00 | 0.00 |
+| 12 | 0.00 | 0.00 | 0.00 |
+| 14 | 0.00 | 0.00 | 0.00 |
+| 15 | 0.00 | 0.00 | 0.00 |
+| 16 | 0.00 | 0.00 | 0.00 |
+| 18 | 0.00 | 0.00 | 0.00 |
+| 20 | 0.00 | 1,338,477.16 | 181,238.68 |
+| 22 | 0.00 | 1,338,477.16 | 181,238.68 |
+| 25 | 0.00 | 1,338,477.16 | 181,238.68 |
+| 30 | 0.00 | 1,338,477.16 | 181,238.68 |
+
+Supplementary fine probe (same base config; marked supplementary, not part
+of the prescribed grid; `outputs/ensemble_flip_calib_fine`, 5/5 optimal)
+resolves the turn-on between 18 and 20 (burn x1.0):
+
+| Subsidy ($/m3) | Total salvage (m3) | Step-1 salvage (m3) | DTs over breakeven |
+| --- | --- | --- | --- |
+| 19.0 | 0.00 | 0.00 | none |
+| 19.1 | 61,549.50 | 15,907.90 | SPF_ESSF (19.088) |
+| 19.2 | 288,479.53 | 43,142.77 | + SPF_MS (19.104) |
+| 19.3 | 288,479.53 | 43,142.77 | (plateau) |
+| 19.4 | 1,338,477.16 | 181,238.68 | + SPF_IDF (19.368), SPF_SBPS (19.397) |
+
+**Turn-on ≈ 19.1 $/m3; ramp across 19.1–19.4; saturation by 19.4** at
+1,338,477.16 m3 — bit-identical to the pre-calibration physical maximum
+(the same fire influx on the same offered slack). The flip moved from
+≈ 48 to ≈ 19.1–19.4 $/m3, exactly the volume-weighted SPF breakevens the
+adjusted calibration predicts (SPF DT margin −19.1 $/m3 at subsidy 0).
+
+Why the ramp is narrow in the coupled run: every ARE cohort in the WS3
+bridge maps to one of the four SPF development types (SBPS/IDF/MS/ESSF,
+breakevens 19.09–19.40), so only the SPF cluster is behaviorally active.
+The wider species-level heterogeneity in the price surface (Cedar ≈ 15.5,
+Hem-Bal ≈ 19.6, Other ≈ 27–30) does not bind because no bridge stratum
+maps to those DTs. The FESBC $14–15/m3 benchmark now sits just BELOW the
+turn-on: benchmark-level support closes ~75–80% of the margin gap but does
+not flip the program — the minimum-subsidy question is genuinely open.
+
+Objective responses (burn x1.0): pre-flip the principal step-1 objective
+falls ~33.4k $ per $/m3 of subsidy (a pure transfer on the offered burned
+stock; the offered stock is behaviorally invariant) while the agent step-1
+objective is flat at 130,041,680.42 (bit-identical to the pre-adjustment
+sweeps — green economics unchanged); post-flip the agent objective rises
+with the subsidy paid on newly salvaged volume (130.15M at 20, 130.48M at
+22, 130.97M at 25, 131.78M at 30).
+
+Green invariance: green harvest is identical at every subsidy —
+36,279,196.26 m3 at burn x1.0 (max pairwise spread 7.5e-9, solver
+precision) and 48,622,159.93 m3 at burn x0.0; salvage never displaces
+green harvest. Burn x0.0 salvage is 0.00 at every subsidy (no fire).
+
+### Before/after summary (adjusted)
+
+| Calibration state | Subsidy ($/m3) | Burned salvage (m3) |
+| --- | --- | --- |
+| Pre-calibration (placeholder economics) | 0.0–9.5 | 1,338,477.16 (flat, subsidy-invariant) |
+| First recalibration (grey-stage mix, +35% premium) | 0–47.9 | 0.00; step to maximal at ≈48.0 |
+| **Prompt-salvage adjustment (this round)** | 0–19.0 | 0.00 |
+| | 19.1 | 61,549.50 |
+| | 19.2–19.3 | 288,479.53 |
+| | ≥19.4 | 1,338,477.16 (flat, maximal) |
+
+The subsidy remains a real behavioral instrument, now with the flip in the
+high teens (≈19.1–19.4 $/m3) instead of ≈48, and the default 3 $/m3 policy
+still produces zero salvage.
+
 ## Caveats
 
 - **2025-only severity scope.** Every rated row in the layer carries
@@ -269,14 +420,19 @@ net recovery cost absent substantial support.
   unmatched label (labels and counts in the error), coverage scaling
   0.3 -> volume x0.3, coverage clamp at 1, fatal missing/non-positive
   denominator, fatal missing severity-polygon area, unrated rows unaffected.
-  Recalibration tests: pinned economic constants, margin decomposition
-  (green +37, salvage −19.7 at subsidy 0 on the SPF sawlog basis), agent
-  behavior at subsidy 0 (no salvage) vs 25 (full influx salvage),
-  economics scenario override + manifest echo, `Economics` validation
-  fail-fast, RHRunConfig flat-field assembly and ensemble-axis acceptance.
-- Pipeline re-runs: ingestion 33.9 s (volumes row-identical, new economic
-  manifest echo); ws3 smoke regression bit-identical (24,328,759.75 m3);
-  RH dev run `outputs/rh_100yr_calib` (optimal, 157.0 s, zero salvage at
-  the default subsidy); prescribed 20-scenario flip sweep
-  (`outputs/ensemble_flip_calib`, 20/20 optimal, 143.9 s) plus the
-  supplementary flip-locating sweeps recorded above.
+  Recalibration tests: pinned economic constants (burned costs 56/38),
+  margin decomposition (green +37 on the SPF sawlog basis; salvage margins
+  at subsidy 0 of −11.70 sawlog basis, −15.145 transition mix, −19.10
+  development-type mix), prompt-salvage grade-transition math
+  (200 x 0.30 x (0.805 x 0.80 + 0.092 x 0.35) = 40.572), agent behavior at
+  subsidy 0 (no salvage) vs 25 (full influx salvage), economics scenario
+  override + manifest echo, `Economics` validation fail-fast, RHRunConfig
+  flat-field assembly and ensemble-axis acceptance.
+- Pipeline re-runs (post-adjustment): ingestion 34.7 s (price columns and
+  green/burned totals row-identical, `B_*` grade mix updated, new manifest
+  echo); ws3 smoke regression bit-identical (24,328,759.75 m3); RH dev run
+  `outputs/rh_100yr_calib` (optimal, 154.9 s, zero salvage at the default
+  subsidy); prescribed 26-scenario flip sweep
+  (`outputs/ensemble_flip_calib`, 26/26 optimal, 151.8 s) plus the
+  supplementary 5-scenario fine probe (`outputs/ensemble_flip_calib_fine`,
+  5/5 optimal) resolving the turn-on at 19.1–19.4 $/m3.

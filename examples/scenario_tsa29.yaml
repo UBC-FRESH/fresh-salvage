@@ -34,9 +34,9 @@ severity:
 # economics:
 #   subsidy_rate_per_m3: 3.0
 #   green_harvest_cost: 45.0
-#   burned_harvest_cost: 61.0
+#   burned_harvest_cost: 56.0
 #   green_transport_cost_per_m3: 30.0
-#   burned_transport_cost_per_m3: 41.0
+#   burned_transport_cost_per_m3: 38.0
 #   green_stumpage_rate: 15.0
 #   burned_stumpage_rate: 0.25
 #   burned_price_discount: 0.65

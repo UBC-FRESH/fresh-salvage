@@ -94,7 +94,7 @@ def test_stand_record() -> None:
         green_stumpage_rate=15.0,
         burned_stumpage_rate=0.25,
         harvest_cost_green=45.0,
-        harvest_cost_burned=61.0,
+        harvest_cost_burned=56.0,
         subsidy_total=90.0,
         stumpage_green_total=1500.0,
         stumpage_burned_total=7.5,

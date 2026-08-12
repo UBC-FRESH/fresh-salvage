@@ -397,11 +397,12 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
     assert cedar["Cedar_Sawlog_Vol"] == pytest.approx(200.0 * 0.805)
     assert cedar["Cedar_Peelers_Vol"] == pytest.approx(200.0 * 0.092)
     assert cedar["Cedar_Pulpwood_Vol"] == pytest.approx(200.0 * 0.103)
-    # B_Cedar_Sawlog_Vol = live * frac * split * transition = 200*0.30*0.805*0.40
-    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(19.32)
+    # B_Cedar_Sawlog_Vol = live * frac * (split_saw * t_ss + split_peel * t_ps)
+    # = 200*0.30*(0.805*0.80 + 0.092*0.35) (prompt-salvage grade retention).
+    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(40.572)
     # B_Cedar_Peelers_Vol includes Sawlog->Peeler and Peeler->Peeler transitions.
     assert cedar["B_Cedar_Peelers_Vol"] == pytest.approx(
-        200 * 0.30 * (0.805 * 0.05 + 0.092 * 0.20)
+        200 * 0.30 * (0.805 * 0.10 + 0.092 * 0.55)
     )
 
 
@@ -509,9 +510,9 @@ def test_calibrated_economic_constants() -> None:
     }
     assert data.BURNED_PRICE_DISCOUNT == pytest.approx(0.65)
     assert data.GREEN_HARVEST_COST == pytest.approx(45.0)
-    assert data.BURNED_HARVEST_COST == pytest.approx(61.0)
+    assert data.BURNED_HARVEST_COST == pytest.approx(56.0)
     assert data.TRANSPORT_COST_PER_M3 == pytest.approx(30.0)
-    assert data.BURNED_TRANSPORT_COST_PER_M3 == pytest.approx(41.0)
+    assert data.BURNED_TRANSPORT_COST_PER_M3 == pytest.approx(38.0)
     assert data.GREEN_STUMPAGE_RATE == pytest.approx(15.0)
     assert data.BURNED_STUMPAGE_RATE == pytest.approx(0.25)
     assert data.SUBSIDY_RATE_PER_M3 == pytest.approx(3.0)
