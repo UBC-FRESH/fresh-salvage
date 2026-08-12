@@ -6,8 +6,10 @@ per scenario, where a scenario is one point of a cartesian grid over named
 ``burn_rate_multiplier`` for the future fire pattern, ``discount_rate``).
 :func:`expand_scenarios` is the pure grid boundary: axis names are explicit
 config field names (no positional ambiguity), the driver-owned fields
-``run_id``/``output_root`` are reserved, and every grid-shape violation fails
-fast with a structured :class:`EnsembleError` code before any work starts.
+``run_id``/``output_root`` are reserved, ``bridge_path`` is reserved as an
+axis (every scenario is bound to the once-prebuilt shared bridge), and every
+grid-shape violation fails fast with a structured :class:`EnsembleError`
+code before any work starts.
 
 Isolation model
 ---------------
@@ -68,6 +70,12 @@ from fresh_salvage.models import (
 # override).
 RESERVED_SCENARIO_FIELDS = ("run_id", "output_root")
 
+# Fields the ensemble overrides per scenario after expansion: every scenario
+# is bound to the once-prebuilt shared bridge (:func:`_scenario_payload`), so
+# a ``bridge_path`` axis would be silently discarded. It stays required in
+# ``base`` (the bridge source) but is reserved in ``axes``.
+RESERVED_AXIS_FIELDS = ("bridge_path",)
+
 BASELINE_SCENARIO_NAME = "baseline"
 
 
@@ -104,7 +112,12 @@ def expand_scenarios(config: EnsembleConfig) -> list[ScenarioSpec]:
         _require_scenario_field(key, field_names, origin="base")
     axis_names = sorted(config.axes)
     for axis in axis_names:
-        _require_scenario_field(axis, field_names, origin="axes")
+        _require_scenario_field(
+            axis,
+            field_names,
+            origin="axes",
+            reserved=RESERVED_SCENARIO_FIELDS + RESERVED_AXIS_FIELDS,
+        )
         if not config.axes[axis]:
             raise EnsembleError(
                 "ensemble_axis_empty",
@@ -161,9 +174,13 @@ def run_ensemble(config: EnsembleConfig, verbose: bool = False) -> EnsembleResul
     manifest_path = layout.manifest_path(f"{ensemble_slug}-ensemble-manifest")
 
     specs = expand_scenarios(config)
+    # Digest the grid config and input tables BEFORE the bridge prebuild so a
+    # missing input fails fast (ensemble_input_missing) without paying for a
+    # bridge rebuild.
+    source_checksums = _provenance_checksums(config, specs)
     bridge = _prebuild_bridge(config, specs[0])
+    source_checksums.update(_bridge_checksums(bridge))
     payloads = [_scenario_payload(config, spec, bridge) for spec in specs]
-    source_checksums = _source_checksums(config, specs, bridge)
 
     if config.max_workers == 1:
         # Sequential in-process profile (debug/test): same worker function,
@@ -173,7 +190,9 @@ def run_ensemble(config: EnsembleConfig, verbose: bool = False) -> EnsembleResul
             for payload in payloads
         ]
     else:
-        records = _run_parallel(specs, payloads, max_workers=config.max_workers)
+        records = _run_parallel(
+            specs, payloads, max_workers=config.max_workers, verbose=verbose
+        )
     succeeded = sum(record.status != "failed" for record in records)
     failed = len(records) - succeeded
     status = "ok" if failed == 0 else ("failed" if succeeded == 0 else "partial")
@@ -214,21 +233,25 @@ def run_ensemble(config: EnsembleConfig, verbose: bool = False) -> EnsembleResul
 
 
 def _require_scenario_field(
-    key: str, field_names: set[str], *, origin: str
+    key: str,
+    field_names: set[str],
+    *,
+    origin: str,
+    reserved: tuple[str, ...] = RESERVED_SCENARIO_FIELDS,
 ) -> None:
     """Fail fast when a base/axes key is reserved or not an RHRunConfig field."""
 
-    if key in RESERVED_SCENARIO_FIELDS:
+    if key in reserved:
         raise EnsembleError(
             "ensemble_field_reserved",
-            f"{origin} key {key!r} is driver-owned; the ensemble assigns "
-            f"{', '.join(RESERVED_SCENARIO_FIELDS)} per scenario",
+            f"{origin} key {key!r} is driver-owned; the ensemble assigns or "
+            f"overrides {', '.join(reserved)} per scenario",
         )
     if key not in field_names:
         raise EnsembleError(
             "ensemble_axis_unknown",
             f"{origin} key {key!r} is not an RHRunConfig field; valid axes: "
-            f"{sorted(field_names - set(RESERVED_SCENARIO_FIELDS))}",
+            f"{sorted(field_names - set(reserved))}",
         )
 
 
@@ -306,6 +329,7 @@ def _run_parallel(
     payloads: list[dict[str, object]],
     *,
     max_workers: int,
+    verbose: bool,
 ) -> list[ScenarioRecord]:
     """Run scenario workers on a spawn-context process pool.
 
@@ -319,7 +343,7 @@ def _run_parallel(
     records: dict[str, ScenarioRecord] = {}
     with ProcessPoolExecutor(max_workers=max_workers, mp_context=context) as pool:
         futures = {
-            pool.submit(_run_scenario_worker, payload): spec
+            pool.submit(_run_scenario_worker, payload, verbose=verbose): spec
             for spec, payload in zip(specs, payloads, strict=True)
         }
         for future in as_completed(futures):
@@ -380,20 +404,22 @@ def _run_scenario_worker(
     ).model_dump(mode="json")
 
 
-def _source_checksums(
-    config: EnsembleConfig, specs: list[ScenarioSpec], bridge: Path
+def _provenance_checksums(
+    config: EnsembleConfig, specs: list[ScenarioSpec]
 ) -> dict[str, str]:
-    """Return SHA-256 provenance: grid config, input tables, bridge files.
+    """Return SHA-256 provenance for the grid config and input tables.
 
-    ``stands``/``yields`` are single keys when every scenario shares one
-    path; scenarios overriding them produce one ``label:path`` key each.
+    Runs before the bridge prebuild so a missing input fails fast without
+    paying for a rebuild. ``stands``/``yields`` are single keys when every
+    scenario shares one path; scenarios overriding them produce one
+    ``label:path`` key each.
     """
 
     grid_digest = hashlib.sha256(
         json.dumps(config.model_dump(mode="json"), sort_keys=True).encode("utf-8")
     ).hexdigest()
     try:
-        checksums = {
+        return {
             "grid_config": grid_digest,
             **_input_checksums(
                 "stands", [spec.run_config.stands_path for spec in specs]
@@ -402,14 +428,26 @@ def _source_checksums(
                 "yields", [spec.run_config.yields_path for spec in specs]
             ),
         }
-        for name, digest in ws3._file_checksums(Path(bridge)).items():
-            checksums[f"bridge/{name}"] = digest
     except OSError as exc:
         raise EnsembleError(
             "ensemble_input_missing",
             f"ensemble input provenance failed: {exc}",
         ) from exc
-    return checksums
+
+
+def _bridge_checksums(bridge: Path) -> dict[str, str]:
+    """Return ``bridge/<file>`` SHA-256 digests of the prebuilt bridge."""
+
+    try:
+        return {
+            f"bridge/{name}": digest
+            for name, digest in ws3.file_checksums(Path(bridge)).items()
+        }
+    except OSError as exc:
+        raise EnsembleError(
+            "ensemble_input_missing",
+            f"ensemble input provenance failed: {exc}",
+        ) from exc
 
 
 def _input_checksums(label: str, paths: list[Path]) -> dict[str, str]:
@@ -429,6 +467,7 @@ def _sha256_file(path: Path | str) -> str:
 
 __all__ = [
     "BASELINE_SCENARIO_NAME",
+    "RESERVED_AXIS_FIELDS",
     "RESERVED_SCENARIO_FIELDS",
     "EnsembleError",
     "ScenarioSpec",

@@ -783,6 +783,18 @@ class WS3Result(BaseModel):
         }
 
 
+def _default_subsidy_rate_per_m3() -> float:
+    """Return the shared subsidy default.
+
+    Deferred import: ``data`` already imports this module, so a module-level
+    import here would be circular.
+    """
+
+    from fresh_salvage.data import SUBSIDY_RATE_PER_M3
+
+    return SUBSIDY_RATE_PER_M3
+
+
 class RHRunConfig(BaseModel):
     """Configuration for one rolling-horizon coupled WS3/principal/agent run.
 
@@ -818,7 +830,7 @@ class RHRunConfig(BaseModel):
     decay_rate: float = 0.85
     discount_rate: float = 0.03
     burned_limit_annual_m3: float | None = None
-    subsidy_rate_per_m3: float = 3.0
+    subsidy_rate_per_m3: float = Field(default_factory=_default_subsidy_rate_per_m3)
     burn_rate_multiplier: float = 1.0
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -1035,7 +1047,9 @@ class EnsembleConfig(BaseModel):
     the shared ``RHRunConfig`` field values (input paths, horizon, steps,
     per-scenario WS3 ``workers``...). The driver owns ``run_id`` and
     ``output_root`` per scenario, so both are reserved and must not appear
-    in ``base`` or ``axes``; grid-shape violations raise
+    in ``base`` or ``axes``; ``bridge_path`` is required in ``base`` (the
+    bridge source) but reserved as an axis, since every scenario is bound to
+    the once-prebuilt shared bridge. Grid-shape violations raise
     :class:`fresh_salvage.ensemble.EnsembleError` with a structured code at
     expansion time.
     """

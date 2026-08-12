@@ -833,7 +833,7 @@ def _source_checksums(config: RHRunConfig, bridge: Path) -> dict[str, str]:
         "stands": _sha256_file(config.stands_path),
         "yields": _sha256_file(config.yields_path),
     }
-    for name, digest in ws3._file_checksums(Path(bridge)).items():
+    for name, digest in ws3.file_checksums(Path(bridge)).items():
         checksums[f"bridge/{name}"] = digest
     return checksums
 

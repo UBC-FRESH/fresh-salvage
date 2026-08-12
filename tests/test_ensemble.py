@@ -7,7 +7,11 @@ needs the ws3 package and the local TSA29 inputs; it skips cleanly when
 unavailable.
 """
 
+from __future__ import annotations
+
 import json
+from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import pytest
@@ -148,6 +152,20 @@ def test_expand_scenarios_rejects_reserved_fields(tmp_path: Path, reserved: str)
     assert excinfo.value.code == "ensemble_field_reserved"
 
 
+def test_expand_scenarios_rejects_bridge_path_axis(tmp_path: Path) -> None:
+    """The driver binds every scenario to the prebuilt shared bridge, so the
+    grid may not vary bridge_path (it stays required in ``base``)."""
+
+    config = _config(tmp_path, {"bridge_path": [str(tmp_path / "other-bridge")]})
+    with pytest.raises(ensemble.EnsembleError) as excinfo:
+        ensemble.expand_scenarios(config)
+    assert excinfo.value.code == "ensemble_field_reserved"
+
+    # ...while the base bridge path remains a normal, accepted input.
+    specs = ensemble.expand_scenarios(_config(tmp_path, {"subsidy_rate_per_m3": [3.0]}))
+    assert specs[0].run_config.bridge_path == Path(tmp_path / "bridge")
+
+
 def test_expand_scenarios_rejects_empty_axis(tmp_path: Path) -> None:
     config = _config(tmp_path, {"subsidy_rate_per_m3": []})
 
@@ -277,6 +295,117 @@ def test_run_ensemble_rejects_missing_input_files(tmp_path: Path) -> None:
         ensemble.run_ensemble(config)
 
     assert excinfo.value.code == "ensemble_input_missing"
+
+
+def test_run_ensemble_checks_input_checksums_before_bridge_prebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing input fails before the shared bridge is (re)built."""
+
+    def prebuild_must_not_run(config, first):
+        raise AssertionError("bridge prebuild ran before input checksums")
+
+    monkeypatch.setattr(ensemble, "_prebuild_bridge", prebuild_must_not_run)
+    config = _config(tmp_path, {"subsidy_rate_per_m3": [3.0]})
+    Path(config.base["stands_path"]).unlink()
+
+    with pytest.raises(ensemble.EnsembleError) as excinfo:
+        ensemble.run_ensemble(config)
+
+    assert excinfo.value.code == "ensemble_input_missing"
+
+
+class _InlinePool:
+    """ProcessPoolExecutor double running workers synchronously in-process.
+
+    Records the submit kwargs (verbose forwarding) and simulates hard worker
+    deaths: payloads named in ``crash_names`` come back as futures that raise
+    ``BrokenProcessPool`` from ``result()`` instead of returning a record.
+    """
+
+    def __init__(self) -> None:
+        self.crash_names: set[str] = set()
+        self.submit_kwargs: list[dict[str, object]] = []
+
+    def __call__(self, max_workers: int, mp_context: object) -> _InlinePool:
+        return self
+
+    def __enter__(self) -> _InlinePool:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def submit(self, worker, payload: dict[str, object], **kwargs: object) -> Future:
+        self.submit_kwargs.append(kwargs)
+        future: Future = Future()
+        if str(payload["name"]) in self.crash_names:
+            future.set_exception(BrokenProcessPool("worker process died"))
+            return future
+        try:
+            future.set_result(worker(payload, **kwargs))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
+
+def _stub_parallel_pool(
+    monkeypatch: pytest.MonkeyPatch, pool: _InlinePool
+) -> None:
+    """Route the ensemble's pool construction to the in-process double."""
+
+    monkeypatch.setattr(ensemble, "ProcessPoolExecutor", pool)
+    monkeypatch.setattr(ensemble, "as_completed", lambda futures: list(futures))
+    monkeypatch.setattr(
+        ensemble.rh,
+        "run_rh",
+        lambda config, verbose=False: _stub_rh_result(config.run_id),
+    )
+
+
+def test_run_parallel_forwards_verbose_to_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pool submit carries verbose, matching the sequential profile."""
+
+    pool = _InlinePool()
+    _stub_parallel_pool(monkeypatch, pool)
+    config = _config(tmp_path, {"subsidy_rate_per_m3": [3.0]}, max_workers=2)
+
+    result = ensemble.run_ensemble(config, verbose=True)
+
+    assert result.status == "ok"
+    assert pool.submit_kwargs == [{"verbose": True}]
+
+
+def test_run_parallel_captures_worker_crash_as_failed_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker dying without returning becomes an ensemble_worker_crashed
+    record; the ensemble still completes the surviving scenarios."""
+
+    pool = _InlinePool()
+    pool.crash_names.add("subsidy_rate_per_m3-0.0")
+    _stub_parallel_pool(monkeypatch, pool)
+    config = _config(
+        tmp_path, {"subsidy_rate_per_m3": [0.0, 3.0]}, max_workers=2
+    )
+
+    result = ensemble.run_ensemble(config)
+
+    assert result.status == "partial"
+    assert result.scenario_count == 2
+    by_name = {record.name: record for record in result.scenarios}
+    crashed = by_name["subsidy_rate_per_m3-0.0"]
+    assert crashed.status == "failed"
+    assert crashed.error_code == "ensemble_worker_crashed"
+    assert "BrokenProcessPool" in (crashed.error_message or "")
+    assert by_name["subsidy_rate_per_m3-3.0"].status == "optimal"
+    # Grid order is preserved, crash records included.
+    assert [record.name for record in result.scenarios] == [
+        "subsidy_rate_per_m3-0.0",
+        "subsidy_rate_per_m3-3.0",
+    ]
 
 
 def test_ensemble_config_yaml_roundtrip(tmp_path: Path) -> None:

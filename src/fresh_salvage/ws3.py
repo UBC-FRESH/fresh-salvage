@@ -651,7 +651,7 @@ def run_ws3(config: WS3RunConfig, verbose: bool = False) -> WS3Result:
         lp_rows=lp_dimensions["lp_rows"],
         lp_columns=lp_dimensions["lp_columns"],
         solve_seconds=solve_seconds,
-        bridge_checksums=_file_checksums(bridge),
+        bridge_checksums=file_checksums(bridge),
         config=run_config.model_dump(mode="json"),
         diagnostics=diagnostics,
     )
@@ -937,7 +937,7 @@ def _dtype_key_to_json(dtype_key: object) -> str:
     return str(dtype_key)
 
 
-def _file_checksums(directory: Path) -> dict[str, str]:
+def file_checksums(directory: Path) -> dict[str, str]:
     """Return SHA-256 digests of every bridge file in the directory."""
 
     files = sorted(directory.glob(f"{BRIDGE_FILE_PREFIX}.*"))
@@ -971,6 +971,7 @@ __all__ = [
     "derived_bridge_path",
     "enforce_harvest_age_range",
     "even_flow_constraints",
+    "file_checksums",
     "load_full_model",
     "midpoint_age",
     "normalize_status",
