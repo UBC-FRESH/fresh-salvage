@@ -1,12 +1,15 @@
 """Command-line interface for masc-yunhao-xu-linear."""
 
 import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
-from masc_yunhao_xu_linear import __version__
+from masc_yunhao_xu_linear import __version__, data
+from masc_yunhao_xu_linear.models import Diagnostic, IngestResult, ScenarioRunConfig
 
 app = typer.Typer(
     add_completion=False,
@@ -38,13 +41,32 @@ def main(
 
 @app.command()
 def ingest(
+    scenario_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a scenario YAML or JSON config."),
+    ],
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit deterministic JSON output."),
     ] = False,
 ) -> None:
     """Ingest predecessor data sources into the model input layer."""
-    _stub_exit("ingest", json_output)
+    try:
+        scenario = ScenarioRunConfig.read(scenario_path)
+        result = data.ingest(scenario)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code="ingest_failed",
+            message=str(exc),
+            context={
+                "scenario_path": str(scenario_path),
+                "exception_type": type(exc).__name__,
+            },
+        )
+        _print_failure(diagnostic, json_output)
+        raise typer.Exit(code=1)
+    _print_ingest_summary(result, json_output)
 
 
 @app.command(name="ws3-run")
@@ -100,6 +122,49 @@ def export(
 ) -> None:
     """Export pipeline results to tabular artifacts."""
     _stub_exit("export", json_output)
+
+
+def _print_ingest_summary(result: IngestResult, json_output: bool) -> None:
+    """Print the ingestion summary as JSON or a Rich report."""
+
+    if json_output:
+        payload = {"ok": True, "command": "ingest", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(f"[bold green]Ingest complete:[/bold green] {result.run_id}")
+    console.print(f"  Total stands: {result.total_stands:,}")
+    console.print(f"  Burned stands: {result.burned_stands:,}")
+    console.print(f"  Green volume: {result.green_volume:,.0f} m3")
+    console.print(f"  Burned volume: {result.burned_volume:,.0f} m3")
+    console.print(f"  Duration: {result.duration_seconds:.1f} s")
+
+    zone_table = Table(title="Stands per BEC zone")
+    zone_table.add_column("BEC zone")
+    zone_table.add_column("Stands", justify="right")
+    for zone, count in sorted(result.per_bec_zone_counts.items()):
+        zone_table.add_row(zone, f"{count:,}")
+    console.print(zone_table)
+
+    for diagnostic in result.diagnostics:
+        console.print(
+            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
+        )
+
+    console.print("Artifacts:")
+    console.print(f"  {result.data_path}")
+    console.print(f"  {result.csv_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_failure(diagnostic: Diagnostic, json_output: bool) -> None:
+    """Print a structured failure diagnostic."""
+
+    if json_output:
+        payload = {"ok": False, "command": "ingest", **diagnostic.model_dump()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        console.print(f"Error: {diagnostic.message}")
 
 
 def _stub_exit(command: str, json_output: bool) -> None:

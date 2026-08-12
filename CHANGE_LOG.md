@@ -23,3 +23,29 @@ completion and GitHub issue comments.
   burn rate `1/MFRI`, and the predecessor data sources.
 - Verified Phase 0 locally with editable install, `ruff check`, `pytest`, and
   `masc-yunhao-xu-linear --help`.
+
+## 2026-08-12
+
+- Implemented Phase 2 (full-TSA data ingestion) on `main`:
+  - Added pydantic v2 records in `models.py` mirroring the figrecover house
+    style: `ScenarioRunConfig` (with `read()`/`write_json()` for JSON/YAML),
+    `ArtifactLayout` with `data`/`manifests`/`logs` directories, `Stand` and
+    `DevelopmentType` records, `Diagnostic`, `IngestManifest`, and
+    `IngestResult`.
+  - Implemented `data.ingest()` as a faithful port of the predecessor
+    `DP_PA.py` preprocessing (severity-to-burned fractions, burned grade
+    transitions, species grading splits, green/burned prices, subsidy and
+    stumpage rates) with the 11-landscape-unit subset filter removed, so the
+    pipeline covers the full TSA29.
+  - Reproduced the 75-column `Gurobi_test1.csv` schema and added
+    `BEC_ZONE_CODE` and the `development_type` stratum key
+    (`{leading_species_group}_{BEC_ZONE_CODE}`).
+  - Wired the `ingest` CLI command to the ingestion API with deterministic
+    JSON and Rich summary output; other commands remain stubs.
+  - Added the local example scenario `examples/scenario_tsa29.yaml`, synthetic
+    model/data/CLI tests, and a run-manifest evidence artifact.
+  - Design notes: the dataset labels the mid burn-severity tier "Medium"
+    (predecessor mapping "Moderate"); `data.py` normalizes `Medium` ->
+    `Moderate` at the boundary instead of silently treating it as unburned.
+    All 12 BEC zones present in the layer are retained (no zone filtering).
+

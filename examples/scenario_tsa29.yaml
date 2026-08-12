@@ -1,0 +1,16 @@
+# Local example scenario for a full-TSA29 ingestion run.
+#
+# The wl_vfsl_path below is a machine-specific absolute path to the external
+# predecessor WL_VFSL polygon layer. The data file is never vendored in this
+# repository; this example simply points a local run at it. Replace the path
+# with your own copy of WL_VFSL.csv before running.
+#
+# Run from the repository root:
+#   masc-yunhao-xu-linear ingest examples/scenario_tsa29.yaml
+run_id: tsa29-full
+inputs:
+  wl_vfsl_path: /srv/shared-data/gep/jupyterhub07-projects/davis/masc-yunhao-xu/Gurobi/Rolling_horizon_structure/WL_VFSL.csv
+  output_root: outputs/full_tsa
+fire: {}
+metadata:
+  description: Full-TSA29 stand ingestion from the WL_VFSL polygon layer.
