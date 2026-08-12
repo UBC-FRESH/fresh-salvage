@@ -47,12 +47,83 @@ class FireDefaults(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+def _default_severity_to_burned_frac() -> dict[str, float]:
+    """Return the shared severity-ladder default.
+
+    Deferred import: ``data`` already imports this module, so a module-level
+    import here would be circular.
+    """
+
+    from fresh_salvage.data import SEVERITY_TO_BURNED_FRAC
+
+    return dict(SEVERITY_TO_BURNED_FRAC)
+
+
+def _default_severity_aliases() -> dict[str, str]:
+    """Return the shared severity-alias default (deferred import, see above)."""
+
+    from fresh_salvage.data import SEVERITY_ALIASES
+
+    return dict(SEVERITY_ALIASES)
+
+
+class SeverityMapping(BaseModel):
+    """Scenario-visible burn-severity ladder (FS-VAL-01 parameterization).
+
+    ``severity_to_burned_frac`` maps a burn-severity rating to the fraction of
+    live volume that becomes salvageable; ``severity_aliases`` normalizes
+    dataset label variants (the WL_VFSL layer labels the mid tier "Medium"
+    while the ladder calls it "Moderate"). Both default to the shared
+    ``data.py`` constants; a scenario may override the whole ladder, but
+    fractions must lie in [0, 1], alias sources must not collide with ladder
+    labels, and every alias target must itself be a ladder label — invalid
+    ladders fail at config parse time, not mid-pipeline.
+    """
+
+    severity_to_burned_frac: dict[str, float] = Field(
+        default_factory=_default_severity_to_burned_frac
+    )
+    severity_aliases: dict[str, str] = Field(default_factory=_default_severity_aliases)
+
+    @field_validator("severity_to_burned_frac")
+    @classmethod
+    def _validate_ladder(cls, value: dict[str, float]) -> dict[str, float]:
+        for label, fraction in value.items():
+            if not str(label).strip():
+                raise ValueError("severity ladder labels must not be empty")
+            if not 0.0 <= fraction <= 1.0:
+                raise ValueError("severity ladder fractions must lie in [0, 1]")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_aliases(self) -> SeverityMapping:
+        for source, target in self.severity_aliases.items():
+            if not str(source).strip() or not str(target).strip():
+                raise ValueError("severity alias labels must not be empty")
+        colliding = sorted(set(self.severity_aliases) & set(self.severity_to_burned_frac))
+        if colliding:
+            raise ValueError(
+                "severity alias sources must not also be ladder labels: "
+                + ", ".join(colliding)
+            )
+        dangling = sorted(
+            set(self.severity_aliases.values()) - set(self.severity_to_burned_frac)
+        )
+        if dangling:
+            raise ValueError(
+                "severity aliases target labels missing from the ladder: "
+                + ", ".join(dangling)
+            )
+        return self
+
+
 class ScenarioRunConfig(BaseModel):
     """Configuration for one full-TSA ingestion run."""
 
     run_id: str = "tsa29-full"
     inputs: ScenarioInputs
     fire: FireDefaults = Field(default_factory=FireDefaults)
+    severity: SeverityMapping = Field(default_factory=SeverityMapping)
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("run_id")
@@ -1239,6 +1310,7 @@ __all__ = [
     "ScenarioInputs",
     "ScenarioRecord",
     "ScenarioRunConfig",
+    "SeverityMapping",
     "Stand",
     "WS3Manifest",
     "WS3Objective",

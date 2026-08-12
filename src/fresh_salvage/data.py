@@ -6,14 +6,50 @@ deterministic pipeline. The predecessor's 11-landscape-unit subset filter is
 removed: every stand in the WL_VFSL polygon layer is retained, so ingestion
 covers the full TSA29.
 
-Burn severity, grade, and species logic is ported unchanged from DP_PA.
+Burn severity, grade, and species logic is ported unchanged from DP_PA, with
+two validation defects (FS-VAL-01, FS-VAL-02) fixed at the boundary:
+
+Severity ladder (FS-VAL-01)
+---------------------------
 ``SEVERITY_TO_BURNED_FRAC`` converts a stand's burn severity rating into the
-fraction of live volume that becomes salvageable; burned volume is then split
-across the same species/grade buckets as green volume and degraded through
-``BURNED_GRADE_TRANSITION``. The dataset labels the mid severity tier
-"Medium" while the mapping table calls it "Moderate"; ``SEVERITY_ALIASES``
-normalizes that label at the boundary. Unrated (NaN) and "Unknown" stands are
-treated as unburned, and "Unknown" is reported as a warning diagnostic.
+fraction of live volume that becomes salvageable. The ladder is a
+scenario-visible parameter (:class:`fresh_salvage.models.SeverityMapping` on
+``ScenarioRunConfig.severity``) with the ported defaults — Unburned 0.0,
+Low 0.30, Moderate 0.60, High 0.85 — echoed into the manifest parameters.
+The dataset labels the mid severity tier "Medium" while the mapping table
+calls it "Moderate"; ``SEVERITY_ALIASES`` normalizes that label at the
+boundary. Unrated (NaN) stands are treated as unburned, and the literal
+label ``UNKNOWN_SEVERITY_LABEL`` ("Unknown") maps to
+``UNKNOWN_SEVERITY_FRAC`` (0.0) with a warning diagnostic. Any other
+non-null rating that matches neither the ladder nor the aliases is a
+boundary defect: ingestion halts with ``IngestError``
+(``data_severity_unmatched``) listing the offending labels and their counts
+— the predecessor's silent ``fillna(0.0)`` is not reproduced.
+
+Coverage scaling (FS-VAL-02)
+----------------------------
+The severity rating describes a burn-severity survey polygon that generally
+covers only part of the VRI polygon it was joined to, so applying the
+severity fraction to the stand's entire live volume overstates salvageable
+volume. Each rated row is therefore scaled by a coverage factor::
+
+    coverage = min(1, SHAPE_Area_1 / FEATURE_AREA_SQM)
+
+where ``SHAPE_Area_1`` is the burn-severity polygon area (m2) and
+``FEATURE_AREA_SQM`` is the whole VRI polygon area (m2). UPPER-BOUND CAVEAT:
+both columns are whole-polygon attributes of their respective layers, so the
+ratio is NOT a true spatial intersection of the two geometries. When the
+severity polygon is smaller than the VRI polygon the ratio assumes the
+entire severity polygon lies inside this stand; when it is larger the clamp
+to 1.0 assumes the stand is fully covered. Salvageable volume on rated
+stands is therefore an upper bound. Unrated rows carry no severity polygon
+and are unaffected (their fraction is 0). Rated rows with a missing or
+non-positive denominator (or a missing/non-positive severity-polygon area)
+halt ingestion with ``IngestError`` (``data_coverage_denominator_invalid`` /
+``data_coverage_numerator_invalid``).
+
+Burned volume is split across the same species/grade buckets as green volume
+and degraded through ``BURNED_GRADE_TRANSITION``.
 
 Two predecessor defects are deliberately not reproduced:
 
@@ -57,12 +93,15 @@ from fresh_salvage.models import (
     IngestManifest,
     IngestResult,
     ScenarioRunConfig,
+    SeverityMapping,
     Stand,
     safe_slug,
 )
 
 # --- Burn severity -> burned volume fraction -----------------------------
 # Based on BC Pricing Wildfire Damaged Timber: high severity = more degradation.
+# These are the module-level defaults; the scenario-visible parameter surface
+# is fresh_salvage.models.SeverityMapping on ScenarioRunConfig.severity.
 SEVERITY_TO_BURNED_FRAC = {
     "Unburned": 0.0,
     "Low": 0.30,
@@ -72,7 +111,19 @@ SEVERITY_TO_BURNED_FRAC = {
 # The WL_VFSL burn-severity layer labels the mid tier "Medium"; the mapping
 # table (and the predecessor's intent) call it "Moderate".
 SEVERITY_ALIASES = {"Medium": "Moderate"}
+# The literal "Unknown" rating is recognized (treated as unburned with a
+# warning); every other unmatched non-null rating is fatal.
+UNKNOWN_SEVERITY_LABEL = "Unknown"
 UNKNOWN_SEVERITY_FRAC = 0.0
+
+# --- Burned-area coverage scaling (FS-VAL-02) ------------------------------
+# SHAPE_Area_1 is the whole burn-severity survey polygon area (m2);
+# FEATURE_AREA_SQM is the whole VRI polygon area (m2). Their clamped ratio is
+# an UPPER-BOUND coverage proxy, not a true spatial intersection (see the
+# module docstring). Both are whole-polygon attributes shared across every
+# row of their polygon — they must never be summed over rows.
+COVERAGE_NUMERATOR_COLUMN = "SHAPE_Area_1"
+COVERAGE_DENOMINATOR_COLUMN = "FEATURE_AREA_SQM"
 
 # Grade transition for burned timber: sawlog/peeler degrade to pulpwood.
 BURNED_GRADE_TRANSITION = {
@@ -210,7 +261,13 @@ BASE_COLUMNS = [
     "LANDSCAPE_UNIT_NAME",
 ]
 
-INPUT_COLUMNS = BASE_COLUMNS + ["BEC_ZONE_CODE"]
+# The two coverage columns are read at the boundary but are not part of the
+# output schema: they only shape Total_Burned_Vol via the coverage factor.
+INPUT_COLUMNS = BASE_COLUMNS + [
+    "BEC_ZONE_CODE",
+    COVERAGE_NUMERATOR_COLUMN,
+    COVERAGE_DENOMINATOR_COLUMN,
+]
 
 # Columns whose null values drop the stand (port of cols_to_check).
 NULL_CHECK_COLUMNS = [
@@ -335,7 +392,15 @@ def ingest(scenario: ScenarioRunConfig) -> IngestResult:
     manifest_path = layout.manifest_path(f"{run_slug}-manifest")
 
     input_rows, dropped_null_rows, dropped_zero_live_rows, frame = _read_wl_vfsl(source)
-    burned_fraction = _severity_fraction(frame, diagnostics)
+    severity = scenario.severity
+    severity_fraction = _severity_fraction(
+        frame,
+        diagnostics,
+        severity.severity_to_burned_frac,
+        severity.severity_aliases,
+    )
+    coverage_fraction = _coverage_fraction(frame)
+    burned_fraction = severity_fraction * coverage_fraction
     grade_columns = _derive_grade_columns(frame, burned_fraction)
     for column, values in grade_columns.items():
         frame[column] = values
@@ -379,7 +444,7 @@ def ingest(scenario: ScenarioRunConfig) -> IngestResult:
         green_volume=green_volume,
         per_bec_zone_counts=per_bec_zone_counts,
         per_development_type_counts=per_development_type_counts,
-        parameters=_parameters(),
+        parameters=_parameters(severity),
         diagnostics=diagnostics,
     )
     manifest.write_json(manifest_path)
@@ -497,36 +562,113 @@ def _read_wl_vfsl(path: Path) -> tuple[int, int, int, pd.DataFrame]:
     return input_rows, dropped_null_rows, dropped_zero_live_rows, frame
 
 
-def _severity_fraction(frame: pd.DataFrame, diagnostics: list[Diagnostic]) -> pd.Series:
-    """Map burn severity ratings to burned volume fractions."""
+def _severity_fraction(
+    frame: pd.DataFrame,
+    diagnostics: list[Diagnostic],
+    severity_to_burned_frac: dict[str, float],
+    severity_aliases: dict[str, str],
+) -> pd.Series:
+    """Map burn severity ratings to burned volume fractions.
 
-    aliased_count = int(frame["BURN_SEVERITY_RATING"].isin(SEVERITY_ALIASES).sum())
+    Unrated (NaN) stands and the recognized ``UNKNOWN_SEVERITY_LABEL`` rating
+    map to ``UNKNOWN_SEVERITY_FRAC``. Any other non-null rating that matches
+    neither the ladder nor the aliases is fatal (``data_severity_unmatched``):
+    a silently zeroed severity would understate salvageable volume without
+    leaving a trace.
+    """
+
+    rating = frame["BURN_SEVERITY_RATING"]
+    severity = rating.replace(severity_aliases)
+    fraction = severity.map(severity_to_burned_frac)
+    explicit_unknown = severity == UNKNOWN_SEVERITY_LABEL
+    unmatched = severity.notna() & fraction.isna() & ~explicit_unknown
+    if unmatched.any():
+        counts = {
+            str(label): int(count)
+            for label, count in sorted(severity[unmatched].value_counts().items())
+        }
+        raise IngestError(
+            code="data_severity_unmatched",
+            message=(
+                "WL_VFSL contains burn severity ratings that match neither the "
+                f"severity ladder nor the aliases nor "
+                f"'{UNKNOWN_SEVERITY_LABEL}' (label: stand count): {counts}. "
+                "Extend the scenario severity ladder or aliases instead of "
+                "silently treating these stands as unburned."
+            ),
+        )
+
+    aliased_count = int(rating.isin(severity_aliases).sum())
     if aliased_count:
+        alias_summary = ", ".join(
+            f"'{source}'->'{target}'"
+            for source, target in sorted(severity_aliases.items())
+        )
         diagnostics.append(
             Diagnostic(
                 severity="info",
                 code="ingest_severity_alias",
                 message=(
-                    f"{aliased_count} stands labeled 'Medium' were normalized "
-                    "to 'Moderate'"
+                    f"{aliased_count} stands were normalized through severity "
+                    f"aliases ({alias_summary})"
                 ),
             )
         )
-    severity = frame["BURN_SEVERITY_RATING"].replace(SEVERITY_ALIASES)
-    fraction = severity.map(SEVERITY_TO_BURNED_FRAC)
-    explicit_unknown = severity.fillna("") == "Unknown"
     if explicit_unknown.any():
         diagnostics.append(
             Diagnostic(
                 severity="warning",
                 code="ingest_unknown_severity",
                 message=(
-                    f"{int(explicit_unknown.sum())} stands rated 'Unknown' are "
-                    "treated as unburned"
+                    f"{int(explicit_unknown.sum())} stands rated "
+                    f"'{UNKNOWN_SEVERITY_LABEL}' are treated as unburned"
                 ),
             )
         )
     return fraction.fillna(UNKNOWN_SEVERITY_FRAC)
+
+
+def _coverage_fraction(frame: pd.DataFrame) -> pd.Series:
+    """Return the upper-bound burned-area coverage of each row.
+
+    ``coverage = min(1, SHAPE_Area_1 / FEATURE_AREA_SQM)`` for rated rows
+    (see the module docstring for the upper-bound caveat). Unrated rows carry
+    no severity polygon; their coverage is 1.0, which is inert because their
+    severity fraction is 0. Rated rows with a missing/non-positive
+    denominator or a missing/non-positive severity-polygon area are fatal:
+    the coverage of a rated stand must never be silently invented.
+    """
+
+    rated = frame["BURN_SEVERITY_RATING"].notna()
+    if not rated.any():
+        return pd.Series(1.0, index=frame.index, dtype=float)
+
+    numerator = pd.to_numeric(frame[COVERAGE_NUMERATOR_COLUMN], errors="coerce")
+    denominator = pd.to_numeric(frame[COVERAGE_DENOMINATOR_COLUMN], errors="coerce")
+
+    invalid_denominator = rated & (denominator.isna() | (denominator <= 0))
+    if invalid_denominator.any():
+        raise IngestError(
+            code="data_coverage_denominator_invalid",
+            message=(
+                f"{int(invalid_denominator.sum())} rated stands lack a positive "
+                f"{COVERAGE_DENOMINATOR_COLUMN}; coverage scaling requires a "
+                "positive whole-polygon area for every rated stand."
+            ),
+        )
+    invalid_numerator = rated & (numerator.isna() | (numerator <= 0))
+    if invalid_numerator.any():
+        raise IngestError(
+            code="data_coverage_numerator_invalid",
+            message=(
+                f"{int(invalid_numerator.sum())} rated stands lack a positive "
+                f"{COVERAGE_NUMERATOR_COLUMN}; a burn severity rating without "
+                "a positive severity-polygon area is a boundary defect."
+            ),
+        )
+
+    coverage = (numerator / denominator).clip(upper=1.0)
+    return coverage.where(rated, 1.0)
 
 
 def _derive_grade_columns(frame: pd.DataFrame, burned_fraction: pd.Series) -> dict[str, np.ndarray]:
@@ -598,13 +740,24 @@ def _sorted_counts(frame: pd.DataFrame, column: str) -> dict[str, int]:
     return {str(key): int(count) for key, count in sorted(frame[column].value_counts().items())}
 
 
-def _parameters() -> dict[str, object]:
+def _parameters(severity: SeverityMapping) -> dict[str, object]:
     """Return the parameter surface recorded in the run manifest."""
 
     return {
-        "severity_to_burned_frac": SEVERITY_TO_BURNED_FRAC,
-        "severity_aliases": SEVERITY_ALIASES,
+        "severity_to_burned_frac": dict(severity.severity_to_burned_frac),
+        "severity_aliases": dict(severity.severity_aliases),
+        "unknown_severity_label": UNKNOWN_SEVERITY_LABEL,
         "unknown_severity_frac": UNKNOWN_SEVERITY_FRAC,
+        "coverage_scaling": {
+            "numerator_column": COVERAGE_NUMERATOR_COLUMN,
+            "denominator_column": COVERAGE_DENOMINATOR_COLUMN,
+            "formula": "coverage = min(1, SHAPE_Area_1 / FEATURE_AREA_SQM)",
+            "caveat": (
+                "Upper bound: both columns are whole-polygon areas of their "
+                "respective layers, so the ratio is not a true spatial "
+                "intersection of the severity fragment with the VRI polygon."
+            ),
+        },
         "burned_grade_transition": BURNED_GRADE_TRANSITION,
         "species_grade_split": SPECIES_GRADE_SPLIT,
         "subsidy_rate_per_m3": SUBSIDY_RATE_PER_M3,
@@ -643,6 +796,8 @@ __all__ = [
     "BURNED_PRICE_DISCOUNT",
     "BURNED_PRICES",
     "BURNED_STUMPAGE_RATE",
+    "COVERAGE_DENOMINATOR_COLUMN",
+    "COVERAGE_NUMERATOR_COLUMN",
     "ECONOMIC_OUTPUT_COLUMNS",
     "GRADE_COLUMNS",
     "GRADE_COLUMN_SUFFIX",
@@ -661,6 +816,7 @@ __all__ = [
     "SPECIES_SLOT_COLUMNS",
     "SUBSIDY_RATE_PER_M3",
     "UNKNOWN_SEVERITY_FRAC",
+    "UNKNOWN_SEVERITY_LABEL",
     "UNKNOWN_SPECIES_GROUP",
     "development_types_from_frame",
     "ingest",

@@ -117,6 +117,10 @@ def _write_synthetic_scenario(tmp_path: Path) -> tuple[Path, int]:
             "LANDSCAPE_UNIT_ID": "9999",
             "LANDSCAPE_UNIT_NAME": "Outside canonical set",
             "BEC_ZONE_CODE": "SBPS",
+            # Rated rows need valid coverage areas (FS-VAL-02 fail-fast);
+            # SHAPE_Area_1 == FEATURE_AREA_SQM means full coverage.
+            "SHAPE_Area_1": "50000.0",
+            "FEATURE_AREA_SQM": "50000.0",
         }
         for index in range(1, 6)
     ]

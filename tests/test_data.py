@@ -8,7 +8,12 @@ import pandas as pd
 import pytest
 
 from fresh_salvage import data
-from fresh_salvage.models import IngestManifest, ScenarioInputs, ScenarioRunConfig
+from fresh_salvage.models import (
+    IngestManifest,
+    ScenarioInputs,
+    ScenarioRunConfig,
+    SeverityMapping,
+)
 
 # Canonical 11-LU subset used by the predecessor (must NOT filter the output).
 PREDECESSOR_11_LANDSCAPE_UNITS = {
@@ -27,7 +32,13 @@ PREDECESSOR_11_LANDSCAPE_UNITS = {
 
 
 def _stand_row(**overrides: object) -> dict[str, object]:
-    """Return a valid synthetic stand row with safe defaults for every column."""
+    """Return a valid synthetic stand row with safe defaults for every column.
+
+    The VRI polygon is 10 ha (FEATURE_AREA_SQM 100,000 m2). SHAPE_Area_1
+    defaults to None (unrated stand carries no severity polygon); rated rows
+    must set it — a rated row without a positive severity-polygon area is a
+    boundary defect (FS-VAL-02 fail-fast).
+    """
 
     row: dict[str, object] = {column: None for column in data.INPUT_COLUMNS}
     row.update(
@@ -50,16 +61,27 @@ def _stand_row(**overrides: object) -> dict[str, object]:
             "LANDSCAPE_UNIT_ID": "1389",
             "LANDSCAPE_UNIT_NAME": "Canonical",
             "BEC_ZONE_CODE": "SBPS",
+            "SHAPE_Area_1": None,
+            "FEATURE_AREA_SQM": "100000.0",
         }
     )
     row.update(overrides)
     return row
 
 
+def _fully_covered(**overrides: object) -> dict[str, object]:
+    """Return a rated stand row whose severity polygon covers it (coverage 1)."""
+
+    overrides.setdefault("SHAPE_Area_1", "100000.0")
+    return _stand_row(**overrides)
+
+
 def make_synthetic_frame() -> pd.DataFrame:
     """Build the 13-row synthetic stand frame used by the pipeline tests.
 
-    Retained rows (11) and their expected burned fractions:
+    Retained rows (11) and their expected burned fractions (every rated row is
+    fully covered: SHAPE_Area_1 == FEATURE_AREA_SQM, so coverage is 1 and the
+    severity fraction passes through unchanged):
 
     - rows 1-6: FD (SPF) with live 100 and severity
       NaN/Unburned/Low/Medium/High/Unknown -> fractions 0/0/0.30/0.60/0.85/0
@@ -74,31 +96,31 @@ def make_synthetic_frame() -> pd.DataFrame:
 
     rows = [
         _stand_row(FEATURE_ID="1"),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="2",
             BURN_SEVERITY_RATING="Unburned",
             LANDSCAPE_UNIT_ID="1390",
             BEC_ZONE_CODE="IDF",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="3",
             BURN_SEVERITY_RATING="Low",
             LANDSCAPE_UNIT_ID="9999",
             BEC_ZONE_CODE="MS",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="4",
             BURN_SEVERITY_RATING="Medium",
             LANDSCAPE_UNIT_ID="1382",
             BEC_ZONE_CODE="ESSF",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="5",
             BURN_SEVERITY_RATING="High",
             LANDSCAPE_UNIT_ID="9999",
             BEC_ZONE_CODE="SBS",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="6",
             BURN_SEVERITY_RATING="Unknown",
             LANDSCAPE_UNIT_ID="1404",
@@ -113,7 +135,7 @@ def make_synthetic_frame() -> pd.DataFrame:
             BURN_SEVERITY_RATING="High",
         ),
         _stand_row(FEATURE_ID="8", MEAN=None, BURN_SEVERITY_RATING="High"),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="9",
             SPECIES_CD_1="CW",
             LIVE_VOL_PER_HA_SPP1_175="200.0",
@@ -121,7 +143,7 @@ def make_synthetic_frame() -> pd.DataFrame:
             LANDSCAPE_UNIT_ID="9999",
             BEC_ZONE_CODE="SBPS",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="10",
             SPECIES_CD_1="H",
             LIVE_VOL_PER_HA_SPP1_175="150.0",
@@ -129,7 +151,7 @@ def make_synthetic_frame() -> pd.DataFrame:
             LANDSCAPE_UNIT_ID="1383",
             BEC_ZONE_CODE="IDF",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="11",
             SPECIES_CD_1="LA",
             LIVE_VOL_PER_HA_SPP1_175="120.0",
@@ -137,7 +159,7 @@ def make_synthetic_frame() -> pd.DataFrame:
             LANDSCAPE_UNIT_ID="9999",
             BEC_ZONE_CODE="MS",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="12",
             SPECIES_CD_1="AT",
             LIVE_VOL_PER_HA_SPP1_175="80.0",
@@ -145,7 +167,7 @@ def make_synthetic_frame() -> pd.DataFrame:
             LANDSCAPE_UNIT_ID="1384",
             BEC_ZONE_CODE="BG",
         ),
-        _stand_row(
+        _fully_covered(
             FEATURE_ID="13",
             BURN_SEVERITY_RATING="Moderate",
             LANDSCAPE_UNIT_ID="9999",
@@ -155,7 +177,11 @@ def make_synthetic_frame() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=data.INPUT_COLUMNS)
 
 
-def _run_ingest(tmp_path: Path, frame: pd.DataFrame) -> tuple[data.IngestResult, pd.DataFrame]:
+def _run_ingest(
+    tmp_path: Path,
+    frame: pd.DataFrame,
+    severity: SeverityMapping | None = None,
+) -> tuple[data.IngestResult, pd.DataFrame]:
     """Write the synthetic frame to CSV, ingest it, and return the result."""
 
     csv_path = tmp_path / "wl_vfsl.csv"
@@ -163,6 +189,7 @@ def _run_ingest(tmp_path: Path, frame: pd.DataFrame) -> tuple[data.IngestResult,
     scenario = ScenarioRunConfig(
         run_id="synthetic-run",
         inputs=ScenarioInputs(wl_vfsl_path=csv_path, output_root=tmp_path / "out"),
+        severity=severity or SeverityMapping(),
     )
     result = data.ingest(scenario)
     output = pd.read_parquet(result.data_path)
@@ -201,6 +228,168 @@ def test_severity_to_burned_fraction(tmp_path: Path) -> None:
     assert burned_by_feature["13"] == pytest.approx(60.0)  # canonical Moderate
 
 
+def test_severity_ladder_scenario_override(tmp_path: Path) -> None:
+    """FS-VAL-01: the ladder is a scenario-visible parameter, echoed to the manifest."""
+
+    frame = pd.DataFrame(
+        [_fully_covered(FEATURE_ID="30", BURN_SEVERITY_RATING="Low")],
+        columns=data.INPUT_COLUMNS,
+    )
+    severity = SeverityMapping(
+        severity_to_burned_frac={"Unburned": 0.0, "Low": 0.50},
+        severity_aliases={},
+    )
+
+    result, output = _run_ingest(tmp_path, frame, severity=severity)
+
+    # Overridden Low = 0.50 (not the default 0.30) x live 100 x coverage 1.
+    assert output["Total_Burned_Vol"].iloc[0] == pytest.approx(50.0)
+    manifest = IngestManifest.read_json(result.manifest_path)
+    assert manifest.parameters["severity_to_burned_frac"] == {
+        "Unburned": 0.0,
+        "Low": 0.50,
+    }
+    assert manifest.parameters["severity_aliases"] == {}
+
+
+def test_severity_ladder_default_echoed_in_manifest(tmp_path: Path) -> None:
+    result, _ = _run_ingest(tmp_path, make_synthetic_frame())
+
+    manifest = IngestManifest.read_json(result.manifest_path)
+    assert manifest.parameters["severity_to_burned_frac"] == data.SEVERITY_TO_BURNED_FRAC
+    assert manifest.parameters["severity_aliases"] == data.SEVERITY_ALIASES
+    assert manifest.parameters["unknown_severity_label"] == data.UNKNOWN_SEVERITY_LABEL
+    coverage = manifest.parameters["coverage_scaling"]
+    assert coverage["numerator_column"] == data.COVERAGE_NUMERATOR_COLUMN
+    assert coverage["denominator_column"] == data.COVERAGE_DENOMINATOR_COLUMN
+    assert "upper bound" in coverage["caveat"].lower()
+
+
+def test_unmatched_severity_label_is_fatal(tmp_path: Path) -> None:
+    """FS-VAL-01: an unrecognized non-null rating halts ingestion (no silent 0)."""
+
+    frame = pd.DataFrame(
+        [
+            _fully_covered(FEATURE_ID="40", BURN_SEVERITY_RATING="Severe"),
+            _fully_covered(FEATURE_ID="41", BURN_SEVERITY_RATING="Severe"),
+            _fully_covered(FEATURE_ID="42", BURN_SEVERITY_RATING="Bogus"),
+        ],
+        columns=data.INPUT_COLUMNS,
+    )
+    csv_path = tmp_path / "wl_vfsl.csv"
+    frame.to_csv(csv_path, index=False)
+    scenario = ScenarioRunConfig(
+        run_id="synthetic-run",
+        inputs=ScenarioInputs(wl_vfsl_path=csv_path, output_root=tmp_path / "out"),
+    )
+
+    with pytest.raises(data.IngestError) as excinfo:
+        data.ingest(scenario)
+
+    assert excinfo.value.code == "data_severity_unmatched"
+    assert "'Severe': 2" in str(excinfo.value)
+    assert "'Bogus': 1" in str(excinfo.value)
+
+
+def test_coverage_scaling_reduces_burned_volume(tmp_path: Path) -> None:
+    """FS-VAL-02: salvageable volume scales by SHAPE_Area_1/FEATURE_AREA_SQM."""
+
+    frame = pd.DataFrame(
+        [
+            _stand_row(
+                FEATURE_ID="50",
+                BURN_SEVERITY_RATING="High",
+                SHAPE_Area_1="30000.0",  # coverage 0.30
+            )
+        ],
+        columns=data.INPUT_COLUMNS,
+    )
+
+    _, output = _run_ingest(tmp_path, frame)
+
+    assert output["Total_Burned_Vol"].iloc[0] == pytest.approx(100.0 * 0.85 * 0.30)
+
+
+def test_coverage_ratio_clamped_to_one(tmp_path: Path) -> None:
+    """A severity polygon larger than the VRI polygon caps coverage at 1."""
+
+    frame = pd.DataFrame(
+        [
+            _stand_row(
+                FEATURE_ID="51",
+                BURN_SEVERITY_RATING="High",
+                SHAPE_Area_1="250000.0",  # 2.5x the polygon area
+            )
+        ],
+        columns=data.INPUT_COLUMNS,
+    )
+
+    _, output = _run_ingest(tmp_path, frame)
+
+    assert output["Total_Burned_Vol"].iloc[0] == pytest.approx(100.0 * 0.85)
+
+
+def test_coverage_missing_denominator_is_fatal(tmp_path: Path) -> None:
+    """Rated rows require a positive FEATURE_AREA_SQM (structured error)."""
+
+    frame = pd.DataFrame(
+        [
+            _stand_row(
+                FEATURE_ID="52",
+                BURN_SEVERITY_RATING="High",
+                SHAPE_Area_1="30000.0",
+                FEATURE_AREA_SQM=None,
+            )
+        ],
+        columns=data.INPUT_COLUMNS,
+    )
+    csv_path = tmp_path / "wl_vfsl.csv"
+    frame.to_csv(csv_path, index=False)
+    scenario = ScenarioRunConfig(
+        run_id="synthetic-run",
+        inputs=ScenarioInputs(wl_vfsl_path=csv_path, output_root=tmp_path / "out"),
+    )
+
+    with pytest.raises(data.IngestError) as excinfo:
+        data.ingest(scenario)
+
+    assert excinfo.value.code == "data_coverage_denominator_invalid"
+
+
+def test_coverage_missing_severity_area_is_fatal(tmp_path: Path) -> None:
+    """Rated rows require a positive SHAPE_Area_1 (structured error)."""
+
+    frame = pd.DataFrame(
+        [_stand_row(FEATURE_ID="53", BURN_SEVERITY_RATING="High")],
+        columns=data.INPUT_COLUMNS,
+    )
+    csv_path = tmp_path / "wl_vfsl.csv"
+    frame.to_csv(csv_path, index=False)
+    scenario = ScenarioRunConfig(
+        run_id="synthetic-run",
+        inputs=ScenarioInputs(wl_vfsl_path=csv_path, output_root=tmp_path / "out"),
+    )
+
+    with pytest.raises(data.IngestError) as excinfo:
+        data.ingest(scenario)
+
+    assert excinfo.value.code == "data_coverage_numerator_invalid"
+
+
+def test_unrated_rows_ignore_coverage_areas(tmp_path: Path) -> None:
+    """Unrated rows carry no severity polygon and stay unburned."""
+
+    frame = pd.DataFrame(
+        [_stand_row(FEATURE_ID="54", SHAPE_Area_1=None, FEATURE_AREA_SQM=None)],
+        columns=data.INPUT_COLUMNS,
+    )
+
+    result, output = _run_ingest(tmp_path, frame)
+
+    assert result.total_stands == 1
+    assert output["Total_Burned_Vol"].iloc[0] == pytest.approx(0.0)
+
+
 def test_burned_grade_transition(tmp_path: Path) -> None:
     _, output = _run_ingest(tmp_path, make_synthetic_frame())
 
@@ -227,7 +416,7 @@ def test_other_species_volume(tmp_path: Path) -> None:
 def test_other_species_burned_volume_conserved(tmp_path: Path) -> None:
     frame = pd.DataFrame(
         [
-            _stand_row(
+            _fully_covered(
                 FEATURE_ID="20",
                 SPECIES_CD_1="AT",
                 LIVE_VOL_PER_HA_SPP1_175="100.0",

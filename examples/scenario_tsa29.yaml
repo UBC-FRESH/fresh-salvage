@@ -12,5 +12,20 @@ inputs:
   wl_vfsl_path: /srv/shared-data/gep/jupyterhub07-projects/davis/masc-yunhao-xu/Gurobi/Rolling_horizon_structure/WL_VFSL.csv
   output_root: outputs/full_tsa
 fire: {}
+# FS-VAL-01: the burn-severity ladder is a scenario-visible parameter. The
+# values below are the package defaults (shown for documentation); omit the
+# block to inherit them. "Medium" is normalized to "Moderate" via the alias;
+# any other unmatched non-null rating is fatal (data_severity_unmatched).
+# FS-VAL-02: rated stands are coverage-scaled by
+# min(1, SHAPE_Area_1 / FEATURE_AREA_SQM) — an upper-bound proxy, not a true
+# spatial intersection.
+severity:
+  severity_to_burned_frac:
+    Unburned: 0.0
+    Low: 0.30
+    Moderate: 0.60
+    High: 0.85
+  severity_aliases:
+    Medium: Moderate
 metadata:
   description: Full-TSA29 stand ingestion from the WL_VFSL polygon layer.
