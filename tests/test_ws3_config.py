@@ -8,6 +8,7 @@ that dependency is loaded lazily inside the solve functions.
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -309,6 +310,92 @@ def test_build_smashed_no_lu_bridge_fails_on_incomplete_stage1(tmp_path: Path) -
         ws3.build_smashed_no_lu_bridge(stage1, tmp_path / "out")
 
     assert excinfo.value.code == "ws3_stage1_incomplete"
+
+
+def test_build_smashed_no_lu_bridge_conserves_staged_area(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    dest = tmp_path / "out" / ws3.DERIVED_BRIDGE_DIRNAME
+
+    ws3.build_smashed_no_lu_bridge(stage1, dest)
+
+    staged_area_ha = float(
+        pd.read_csv(dest.parent / ws3.STAGE1_DERIVED_DIRNAME / "woodstock_areas.csv")[
+            "area_ha"
+        ].sum()
+    )
+    written_area_ha = sum(float(row[-1]) for row in _are_data_lines(dest))
+    assert written_area_ha == pytest.approx(
+        staged_area_ha, rel=ws3.AREA_CONSERVATION_REL_TOLERANCE
+    )
+
+
+def test_build_smashed_no_lu_bridge_fails_when_writer_drops_area(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    # au_id 2999999 has no yield curve, so femic's writer silently dropna-discards
+    # the row: written ARE conserves 35.0 ha of the staged 42.5 ha.
+    (stage1 / "woodstock_areas.csv").write_text(
+        "stand_id,tsa,au_id,ifm,age,area_ha,landscape_unit_id\n"
+        "1,29,2901000,managed,23,10.0,1375\n"
+        "2,29,2901000,managed,27,20.0,1376\n"
+        "3,29,2901000,managed,25,5.0,1375\n"
+        "4,29,2999999,managed,25,7.5,1375\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ws3.WS3Error) as excinfo:
+        ws3.build_smashed_no_lu_bridge(stage1, tmp_path / "out")
+
+    assert excinfo.value.code == "area_conservation_failed"
+    message = str(excinfo.value)
+    assert "35.000000" in message
+    assert "42.500000" in message
+    assert "-7.500000" in message
+
+
+def test_build_smashed_no_lu_bridge_fails_on_invalid_age(tmp_path: Path) -> None:
+    _require_femic_bridge_writer()
+    stage1 = _write_synthetic_stage1(tmp_path)
+    (stage1 / "woodstock_areas.csv").write_text(
+        "stand_id,tsa,au_id,ifm,age,area_ha,landscape_unit_id\n"
+        "1,29,2901000,managed,twenty-three,10.0,1375\n"
+        "2,29,2901000,managed,27,20.0,1376\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ws3.WS3Error) as excinfo:
+        ws3.build_smashed_no_lu_bridge(stage1, tmp_path / "out")
+
+    assert excinfo.value.code == "invalid_age_values"
+    assert "1 rows" in str(excinfo.value)
+    assert "twenty-three" in str(excinfo.value)
+
+
+def test_verify_smashed_bridge_missing_are_raises_ws3_error(tmp_path: Path) -> None:
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    (bridge / "femic_tsa_ws3.lan").write_text("*THEME Managed state\nmanaged\n", encoding="utf-8")
+
+    with pytest.raises(ws3.WS3Error) as excinfo:
+        ws3._verify_smashed_bridge(bridge)
+
+    assert excinfo.value.code == "ws3_bridge_are_missing"
+
+
+def test_verify_smashed_bridge_malformed_are_raises_ws3_error(tmp_path: Path) -> None:
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    (bridge / "femic_tsa_ws3.lan").write_text("*THEME Managed state\nmanaged\n", encoding="utf-8")
+    (bridge / "femic_tsa_ws3.are").write_text(
+        "*A 29 managed 2901000 sbps_pli 2921000 notanage 10.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ws3.WS3Error) as excinfo:
+        ws3._verify_smashed_bridge(bridge)
+
+    assert excinfo.value.code == "ws3_bridge_are_unparseable"
 
 
 def test_resolved_bridge_path_rebuilds_lu_free_bridge(tmp_path: Path) -> None:

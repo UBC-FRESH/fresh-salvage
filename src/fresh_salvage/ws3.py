@@ -11,6 +11,9 @@ before grouping, and femic's own stage-2 writer
 (``femic.ws3_bridge.build_ws3_sections_from_femic_woodstock``) aggregates area
 over ``(TSA, managed, AU, stratum, curve, age)`` so every development type key
 is unique and the compiled schedule covers every development type and period.
+The rebuild fails fast on unparseable inventory ages and reconciles the
+written ARE section against the staged area total, because femic's writer
+silently drops area rows whose ``(TSA, managed, AU)`` key has no yield curve.
 
 The solve follows the TSA29 conventions:
 
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -62,6 +66,7 @@ CC_MAX_HARVEST_AGE = 300
 DEFAULT_AAC_ANNUAL_M3 = 2_937_509
 DEFAULT_UTILIZATION = 0.85
 DEFAULT_EVEN_FLOW_TOLERANCE = 0.1
+AREA_CONSERVATION_REL_TOLERANCE = 1e-6
 
 # Yield curves whose volume never reaches the merchantability rule; they lose
 # ``cc`` operability entirely regardless of the configured harvest age range.
@@ -284,7 +289,9 @@ def build_smashed_no_lu_bridge(
     ``(tsa, ifm, au_id, stratum_code, curve_id, age)`` key at the source and
     the emitted bridge carries exactly five themes. The staged CSVs are kept
     beside ``dest_dir`` for provenance. Raises ``WS3Error`` when the stage-1
-    package is incomplete or the written bridge violates the smash contract.
+    package is incomplete, when any area-row age fails to parse, when the
+    written bridge violates the smash contract, or when the written ARE
+    section does not conserve the staged area total.
     """
 
     source = Path(stage1_dir)
@@ -304,14 +311,31 @@ def build_smashed_no_lu_bridge(
     areas = pd.read_csv(source / STAGE1_AREAS_FILENAME)
     if LANDSCAPE_UNIT_COLUMN in areas.columns:
         areas = areas.drop(columns=[LANDSCAPE_UNIT_COLUMN])
-    ages = pd.to_numeric(areas["age"], errors="coerce").fillna(0).astype(int)
-    areas["age"] = ages.map(partial(midpoint_age, width=width, midpoint=midpoint))
+    parsed_ages = pd.to_numeric(areas["age"], errors="coerce")
+    invalid_age_mask = parsed_ages.isna()
+    if invalid_age_mask.any():
+        examples = areas.loc[invalid_age_mask, "age"].astype(str).head(5).tolist()
+        raise WS3Error(
+            "invalid_age_values",
+            f"femic stage-1 areas table {source / STAGE1_AREAS_FILENAME} contains "
+            f"{int(invalid_age_mask.sum())} rows with unparseable age values "
+            f"(e.g. {examples}); refusing to silently bucket them into age class "
+            f"{midpoint}",
+        )
+    areas["age"] = parsed_ages.astype(int).map(
+        partial(midpoint_age, width=width, midpoint=midpoint)
+    )
     areas.to_csv(staging / STAGE1_AREAS_FILENAME, index=False)
     for name in STAGE1_FILE_NAMES:
         if name == STAGE1_AREAS_FILENAME:
             continue
         shutil.copy2(source / name, staging / name)
 
+    # Mirror femic's writer-side normalization so the conservation gate
+    # reconciles exactly what the writer received against what it wrote.
+    staged_area_ha = float(
+        pd.to_numeric(areas["area_ha"], errors="coerce").fillna(0.0).sum()
+    )
     result = writer(
         woodstock_dir=staging,
         output_dir=dest,
@@ -319,7 +343,39 @@ def build_smashed_no_lu_bridge(
     )
     written = Path(result.output_dir)
     _verify_smashed_bridge(written, width, midpoint)
+    _verify_area_conservation(written, staged_area_ha)
     return written
+
+
+def _parse_are_rows(are_path: Path) -> list[tuple[str, int, float]]:
+    """Parse ARE data rows into trusted ``(raw_line, age, area_ha)`` triples.
+
+    Boundary parse: an unreadable or malformed ARE section fails with a
+    structured ``WS3Error`` code instead of leaking ``FileNotFoundError`` or
+    ``ValueError`` to callers.
+    """
+
+    try:
+        are_text = are_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise WS3Error(
+            "ws3_bridge_are_missing",
+            f"rebuilt bridge is missing its ARE section: {are_path}",
+        ) from exc
+    rows: list[tuple[str, int, float]] = []
+    for line in are_text.splitlines():
+        if not line.strip().startswith("*A"):
+            continue
+        tokens = line.split()
+        try:
+            rows.append((line, int(tokens[-2]), float(tokens[-1])))
+        except (IndexError, ValueError) as exc:
+            raise WS3Error(
+                "ws3_bridge_are_unparseable",
+                f"rebuilt bridge ARE section {are_path} contains a malformed "
+                f"data row: {line!r}",
+            ) from exc
+    return rows
 
 
 def _verify_smashed_bridge(
@@ -338,9 +394,8 @@ def _verify_smashed_bridge(
     are_path = Path(bridge) / f"{BRIDGE_FILE_PREFIX}.are"
     offenders = [
         line
-        for line in are_path.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("*A")
-        and int(line.split()[-2]) % width != midpoint % width
+        for line, age, _area_ha in _parse_are_rows(are_path)
+        if age % width != midpoint % width
     ]
     if offenders:
         raise WS3Error(
@@ -348,6 +403,31 @@ def _verify_smashed_bridge(
             f"rebuilt bridge {are_path} contains {len(offenders)} ARE rows whose "
             f"age is not a {width}-year class midpoint (e.g. {offenders[0]!r})",
         )
+
+
+def _verify_area_conservation(bridge: Path, expected_area_ha: float) -> None:
+    """Fail fast when the written ARE section does not conserve staged area.
+
+    femic's ``_write_are`` merges the staged areas against the yield-curve map
+    and silently ``dropna``-discards rows whose ``(tsa, ifm, au_id)`` key has
+    no curve, so the written ARE total must be reconciled against the staged
+    (post-smash, LU-dropped) areas-table total before the bridge is trusted.
+    """
+
+    are_path = Path(bridge) / f"{BRIDGE_FILE_PREFIX}.are"
+    written_area_ha = sum(area_ha for _, _, area_ha in _parse_are_rows(are_path))
+    if math.isclose(
+        written_area_ha, expected_area_ha, rel_tol=AREA_CONSERVATION_REL_TOLERANCE
+    ):
+        return
+    delta = written_area_ha - expected_area_ha
+    raise WS3Error(
+        "area_conservation_failed",
+        f"rebuilt bridge {are_path} conserves {written_area_ha:.6f} ha but the "
+        f"staged areas table holds {expected_area_ha:.6f} ha "
+        f"(delta {delta:+.6f} ha, rel tolerance {AREA_CONSERVATION_REL_TOLERANCE}); "
+        "femic's writer silently drops area rows without a matching yield curve",
+    )
 
 
 def _lan_contains_landscape_unit_theme(bridge: Path) -> bool:
@@ -858,6 +938,7 @@ def _file_checksums(directory: Path) -> dict[str, str]:
 
 
 __all__ = [
+    "AREA_CONSERVATION_REL_TOLERANCE",
     "BRIDGE_FILE_PREFIX",
     "BRIDGE_FILE_SUFFIXES",
     "CANONICAL_TSA29_BRIDGE",
