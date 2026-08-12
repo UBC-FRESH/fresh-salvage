@@ -9,8 +9,8 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | Phase | Parent issue | Branch | Status |
 | --- | --- | --- | --- |
 | P0 Skeleton scaffold | TBD | `feature/p0-skeleton-scaffold` | Complete |
-| P1 Data ingestion and typed input records | TBD | `feature/p1-data-ingestion` | Planned |
-| P2 Full-TSA WS3 schedule integration | TBD | `feature/p2-ws3-integration` | Planned |
+| P1 Data ingestion and typed input records | TBD | `feature/p1-data-ingestion` | Complete |
+| P2 Full-TSA WS3 schedule integration | TBD | `feature/p2-ws3-integration` | Active (10-period gate open) |
 | P3 Principal-side linear HiGHS LP | TBD | `feature/p3-principal-lp` | Planned |
 | P4 Agent-side linear HiGHS LP and annual fire simulation | TBD | `feature/p4-agent-fire` | Planned |
 | P5 Rolling-horizon coordination loop | TBD | `feature/p5-rolling-horizon` | Planned |
@@ -61,17 +61,17 @@ Parent issue: TBD
 
 Branch: `feature/p1-data-ingestion`
 
-Status: planned
+Status: complete
 
 Goal: ingest the predecessor data sources at the pipeline boundary and parse
 them into typed Pydantic records that the LP and simulation phases can trust
 without re-validation.
 
-- [ ] P1.1 Define input record models.
-- [ ] P1.2 Implement boundary parsers for predecessor CSV inputs.
-- [ ] P1.3 Wire the `ingest` CLI command to the ingestion API.
-- [ ] P1.4 Add synthetic public-safe fixtures and tests.
-- [ ] P1.5 Docs, roadmap, changelog, and verification closeout.
+- [x] P1.1 Define input record models.
+- [x] P1.2 Implement boundary parsers for predecessor CSV inputs.
+- [x] P1.3 Wire the `ingest` CLI command to the ingestion API.
+- [x] P1.4 Add synthetic public-safe fixtures and tests.
+- [x] P1.5 Docs, roadmap, changelog, and verification closeout.
 
 Acceptance boundary:
 
@@ -85,16 +85,17 @@ Parent issue: TBD
 
 Branch: `feature/p2-ws3-integration`
 
-Status: planned
+Status: active (10-period gate open)
 
 Goal: replace the predecessor 11-landscape-unit subset with the full TSA29 WS3
 bridge, compiling schedule records for every development type and period.
 
-- [ ] P2.1 Compile normalized WS3 schedule records from the bridge files.
-- [ ] P2.2 Provide deterministic provenance for bridge inputs.
-- [ ] P2.3 Wire the `ws3-run` CLI command to the WS3 API.
-- [ ] P2.4 Add tests and docs.
-- [ ] P2.5 Verification and closeout.
+- [x] P2.1 Compile normalized WS3 schedule records from the bridge files.
+- [x] P2.2 Provide deterministic provenance for bridge inputs.
+- [x] P2.3 Wire the `ws3-run` CLI command to the WS3 API.
+- [x] P2.4 Add tests and docs.
+- [ ] P2.5 Verification and closeout (10-period run exceeded the 10-minute
+      gate; awaiting decision).
 
 Acceptance boundary:
 
@@ -199,5 +200,7 @@ Acceptance boundary:
 
 ## Current Next Steps
 
-Phase 0 is complete on `main`. The next phase is Phase 1 (data ingestion and
-typed input records) on `feature/p1-data-ingestion`.
+Phases 0 and 1 are complete on `main`. Phase 2 (full-TSA WS3 schedule
+integration) is implemented and passes unit tests and a 3-period smoke run;
+the 10-period full-TSA verification run exceeded the 10-minute gate and is
+awaiting a decision on horizon, solver options, or machine allocation.

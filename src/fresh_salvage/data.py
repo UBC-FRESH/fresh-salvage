@@ -41,6 +41,7 @@ warning diagnostic.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import UTC, datetime
@@ -367,6 +368,7 @@ def ingest(scenario: ScenarioRunConfig) -> IngestResult:
     manifest = IngestManifest(
         run_id=scenario.run_id,
         source_file=source,
+        source_sha256=_sha256_file(source),
         completed_at=datetime.now(UTC),
         input_rows=input_rows,
         retained_rows=len(frame),
@@ -454,6 +456,12 @@ def development_types_from_frame(frame: pd.DataFrame) -> list[DevelopmentType]:
             )
         )
     return records
+
+
+def _sha256_file(path: Path) -> str:
+    """Return the SHA-256 hex digest of a raw input file."""
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _read_wl_vfsl(path: Path) -> tuple[int, int, int, pd.DataFrame]:

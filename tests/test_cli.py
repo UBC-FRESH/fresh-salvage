@@ -4,12 +4,15 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from typer.testing import CliRunner
 
 from fresh_salvage import __version__, data
 from fresh_salvage.cli import app
 
 runner = CliRunner()
+
+STUB_COMMANDS = ("solve-principal", "solve-agent", "rh-run", "export")
 
 
 def test_cli_help() -> None:
@@ -26,20 +29,42 @@ def test_cli_version() -> None:
     assert f"fresh-salvage {__version__}" in result.stdout
 
 
-def test_cli_stub_command_fails_fast() -> None:
-    result = runner.invoke(app, ["ws3-run"])
+def test_cli_ws3_run_help() -> None:
+    result = runner.invoke(app, ["ws3-run", "--help"])
+
+    assert result.exit_code == 0
+    assert "full-TSA WS3 schedule" in result.stdout
+
+
+@pytest.mark.parametrize("command", STUB_COMMANDS)
+def test_cli_stub_command_fails_with_json_diagnostic(command: str) -> None:
+    result = runner.invoke(app, [command, "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["command"] == command
+    assert payload["diagnostic"]
+    assert "not implemented yet" in payload["diagnostic"]
+
+
+def test_cli_stub_command_fails_fast_without_json() -> None:
+    result = runner.invoke(app, ["solve-principal"])
 
     assert result.exit_code == 1
     assert "not implemented yet" in result.stdout
 
 
-def test_cli_stub_command_json_output() -> None:
-    result = runner.invoke(app, ["ws3-run", "--json"])
+def test_cli_ws3_run_missing_config_fails_with_json_diagnostic(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app, ["ws3-run", str(tmp_path / "missing.yaml"), "--json"]
+    )
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert payload["command"] == "ws3-run"
+    assert payload["diagnostic"]
 
 
 def _write_synthetic_scenario(tmp_path: Path) -> tuple[Path, int]:

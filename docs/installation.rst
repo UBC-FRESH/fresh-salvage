@@ -35,6 +35,6 @@ Smoke Check
 Alpha Boundary
 --------------
 
-Phase 1 ships scaffolded CLI stubs only. ``ingest``, ``ws3-run``,
-``solve-principal``, ``solve-agent``, ``rh-run``, and ``export`` exit with a
-not-implemented diagnostic until their roadmap phases land.
+Phase 1 ships data ingestion and Phase 2 ships the full-TSA WS3 schedule
+integration. ``solve-principal``, ``solve-agent``, ``rh-run``, and ``export``
+exit with a not-implemented diagnostic until their roadmap phases land.

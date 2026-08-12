@@ -56,3 +56,28 @@ completion and GitHub issue comments.
   `fresh_salvage`), and console script (`masc-yunhao-xu-linear` ->
   `fresh-salvage`).
 
+## 2026-08-12
+
+- Implemented Phase 2 (full-TSA WS3 schedule integration):
+  - Added `WS3RunConfig` (run id, bridge path, base year, horizon, period
+    length, max age, worker count, AAC) with no landscape-unit filter,
+    `WS3Objective` (clear-cut action, utilization, even-flow tolerance),
+    `AgeSmashing` (10-year width, midpoint 5), `WS3Manifest` (bridge
+    checksums and config snapshot), and `WS3Result` (per-period volumes and
+    areas, solve seconds, artifact paths).
+  - Implemented `ws3.py` as a full port of the predecessor
+    `ws3_masc_integration.py` for the entire 44,998-row ARE bridge (2,405
+    development types): age smashing, minimum-harvest-age enforcement,
+    AAC ceiling constraints, even-flow constraints, HiGHS solve, and
+    deterministic schedule compilation.
+  - Wired the real `ws3-run` CLI command with `--smoke` and `--json` modes;
+    `solve-principal`, `solve-agent`, `rh-run`, and `export` remain stubs.
+  - Ingest manifests now record `source_sha256` of the source WL_VFSL file.
+  - Added `examples/ws3_tsa29.yaml` and unit tests for configs and pure
+    helpers; installed ws3 runtime dependencies (`dill`, `scipy`,
+    `rasterio`, `fiona`) in the local venv.
+  - Verified: 53 tests pass, `ruff check` clean, 3-period full-TSA smoke run
+    solves to optimal (0.7 s, 3,500 schedule rows). The 10-period gate run
+    exceeded 10 minutes and is awaiting a decision; Phase 2 closeout is open.
+
+

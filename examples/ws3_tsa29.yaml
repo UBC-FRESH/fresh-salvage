@@ -1,0 +1,31 @@
+# Local example WS3 run config for a full-TSA29 solve.
+#
+# The bridge_path below is a machine-specific absolute path to the external
+# validated FEMIC WS3 bridge for TSA29. The bridge files are never vendored in
+# this repository; this example simply points a local run at them. Replace the
+# path with your own validated bridge before running.
+#
+# Production profile (horizon 30, workers 64):
+#   fresh-salvage ws3-run examples/ws3_tsa29.yaml
+#
+# Deterministic smoke profile (horizon 3, workers 2, ~10x faster):
+#   fresh-salvage ws3-run examples/ws3_tsa29.yaml --smoke
+run_id: tsa29-ws3-full
+bridge_path: /srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/femic-tsa29-instance/output/woodstock_tsa29_validated/ws3_bridge
+base_year: 2025
+horizon: 30
+period_length: 10
+max_age: 999
+workers: 64
+age_smashing:
+  enabled: true
+  width: 10
+  midpoint: 5
+objective:
+  action_code: cc
+  utilization: 0.85
+  even_flow_tolerance: 0.1
+aac_annual_m3: 2937509
+output_root: outputs/ws3_full_tsa
+metadata:
+  description: Full-TSA29 WS3 schedule solve with the 2,937,509 m3/yr AAC ceiling.

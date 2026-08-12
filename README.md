@@ -85,7 +85,9 @@ fresh-salvage --version
 fresh-salvage --help
 ```
 
-Phase 1 ships stub commands that fail fast with a not-implemented diagnostic:
+Phase 1 ships data ingestion, and Phase 2 ships the full-TSA WS3 schedule
+integration. The remaining commands fail fast with a not-implemented
+diagnostic:
 
 ```bash
 fresh-salvage ingest
@@ -96,7 +98,8 @@ fresh-salvage rh-run
 fresh-salvage export
 ```
 
-Each stub accepts `--json` for deterministic diagnostic output.
+Implemented commands accept `--json` for deterministic output; stubs accept
+`--json` for a deterministic failure diagnostic.
 
 ## Roadmap
 

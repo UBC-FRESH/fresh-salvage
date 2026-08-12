@@ -1,5 +1,6 @@
 """Data ingestion pipeline tests on synthetic stands (no real WL_VFSL data)."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -342,6 +343,15 @@ def test_manifest_written(tmp_path: Path) -> None:
     assert result.csv_path.is_file()
     assert result.data_path.suffix == ".parquet"
     assert result.csv_path.suffix == ".csv"
+
+
+def test_manifest_records_source_sha256(tmp_path: Path) -> None:
+    result, _ = _run_ingest(tmp_path, make_synthetic_frame())
+
+    manifest = IngestManifest.read_json(result.manifest_path)
+    expected = hashlib.sha256((tmp_path / "wl_vfsl.csv").read_bytes()).hexdigest()
+    assert manifest.source_sha256 == expected
+    assert len(manifest.source_sha256) == 64
 
 
 def test_stands_from_frame(tmp_path: Path) -> None:
