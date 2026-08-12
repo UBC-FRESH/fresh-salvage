@@ -489,6 +489,34 @@ def test_price_dicts_parsed(tmp_path: Path) -> None:
     )
 
 
+def test_calibrated_economic_constants() -> None:
+    """Pin the calibrated defaults (planning/economics-calibration.md)."""
+
+    assert data.GREEN_PRICES == {
+        "SPF_Sawlog": 127,
+        "SPF_Peelers": 146,
+        "SPF_Pulpwood": 55,
+        "Df-Larch_Sawlog": 103,
+        "Df-Larch_Peelers": 118,
+        "Df-Larch_Pulpwood": 55,
+        "Hem-Bal_Sawlog": 120,
+        "Hem-Bal_Peelers": 138,
+        "Hem-Bal_Pulpwood": 55,
+        "Cedar_Sawlog": 144,
+        "Cedar_Peelers": 166,
+        "Cedar_Pulpwood": 55,
+        "Other": 90,
+    }
+    assert data.BURNED_PRICE_DISCOUNT == pytest.approx(0.65)
+    assert data.GREEN_HARVEST_COST == pytest.approx(45.0)
+    assert data.BURNED_HARVEST_COST == pytest.approx(61.0)
+    assert data.TRANSPORT_COST_PER_M3 == pytest.approx(30.0)
+    assert data.BURNED_TRANSPORT_COST_PER_M3 == pytest.approx(41.0)
+    assert data.GREEN_STUMPAGE_RATE == pytest.approx(15.0)
+    assert data.BURNED_STUMPAGE_RATE == pytest.approx(0.25)
+    assert data.SUBSIDY_RATE_PER_M3 == pytest.approx(3.0)
+
+
 def test_economic_columns(tmp_path: Path) -> None:
     _, output = _run_ingest(tmp_path, make_synthetic_frame())
 
@@ -497,6 +525,68 @@ def test_economic_columns(tmp_path: Path) -> None:
     assert output["Burned_Stumpage_Rate"].iloc[0] == pytest.approx(data.BURNED_STUMPAGE_RATE)
     assert output["Harvest_Cost_Green"].iloc[0] == pytest.approx(data.GREEN_HARVEST_COST)
     assert output["Harvest_Cost_Burned"].iloc[0] == pytest.approx(data.BURNED_HARVEST_COST)
+
+
+def test_economics_scenario_override(tmp_path: Path) -> None:
+    """The economic surface is a scenario-visible parameter, echoed to the manifest."""
+
+    from fresh_salvage.models import Economics
+
+    economics = Economics(subsidy_rate_per_m3=12.0, green_harvest_cost=50.0)
+    csv_path = tmp_path / "wl_vfsl.csv"
+    make_synthetic_frame().to_csv(csv_path, index=False)
+    scenario = ScenarioRunConfig(
+        run_id="synthetic-run",
+        inputs=ScenarioInputs(wl_vfsl_path=csv_path, output_root=tmp_path / "out"),
+        economics=economics,
+    )
+
+    result = data.ingest(scenario)
+    output = pd.read_parquet(result.data_path)
+
+    assert output["Subsidy_Rate"].iloc[0] == pytest.approx(12.0)
+    assert output["Harvest_Cost_Green"].iloc[0] == pytest.approx(50.0)
+    row = output[output["FEATURE_ID"].astype(str) == "3"].iloc[0]
+    assert row["Subsidy_Total"] == pytest.approx(row["Total_Burned_Vol"] * 12.0)
+    # Untouched fields keep the calibrated data.py defaults.
+    assert output["Burned_Stumpage_Rate"].iloc[0] == pytest.approx(
+        data.BURNED_STUMPAGE_RATE
+    )
+    manifest = IngestManifest.read_json(result.manifest_path)
+    assert manifest.parameters["subsidy_rate_per_m3"] == 12.0
+    assert manifest.parameters["green_harvest_cost"] == 50.0
+
+
+def test_manifest_echoes_all_economic_parameters(tmp_path: Path) -> None:
+    result, _ = _run_ingest(tmp_path, make_synthetic_frame())
+
+    manifest = IngestManifest.read_json(result.manifest_path)
+    assert manifest.parameters["subsidy_rate_per_m3"] == pytest.approx(
+        data.SUBSIDY_RATE_PER_M3
+    )
+    assert manifest.parameters["green_stumpage_rate"] == pytest.approx(
+        data.GREEN_STUMPAGE_RATE
+    )
+    assert manifest.parameters["burned_stumpage_rate"] == pytest.approx(
+        data.BURNED_STUMPAGE_RATE
+    )
+    assert manifest.parameters["green_harvest_cost"] == pytest.approx(
+        data.GREEN_HARVEST_COST
+    )
+    assert manifest.parameters["burned_harvest_cost"] == pytest.approx(
+        data.BURNED_HARVEST_COST
+    )
+    assert manifest.parameters["green_transport_cost_per_m3"] == pytest.approx(
+        data.TRANSPORT_COST_PER_M3
+    )
+    assert manifest.parameters["burned_transport_cost_per_m3"] == pytest.approx(
+        data.BURNED_TRANSPORT_COST_PER_M3
+    )
+    assert manifest.parameters["burned_price_discount"] == pytest.approx(
+        data.BURNED_PRICE_DISCOUNT
+    )
+    assert manifest.parameters["green_prices"] == data.GREEN_PRICES
+    assert manifest.parameters["burned_prices"] == data.BURNED_PRICES
 
 
 def test_ingest_summary_counts(tmp_path: Path) -> None:

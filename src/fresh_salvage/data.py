@@ -90,6 +90,7 @@ from fresh_salvage.models import (
     ArtifactLayout,
     DevelopmentType,
     Diagnostic,
+    Economics,
     IngestManifest,
     IngestResult,
     ScenarioRunConfig,
@@ -149,31 +150,38 @@ GRADE_COLUMN_SUFFIX = {
     "Pulpwood": "Pulpwood",
 }
 
-# Economic parameters (from the predecessor scenario defaults).
+# Economic parameters (calibrated; per-parameter rationale and sources are
+# documented in planning/economics-calibration.md). These are the module-level
+# defaults; the scenario-visible parameter surface is
+# fresh_salvage.models.Economics on ScenarioRunConfig.economics (and the flat
+# economic fields of RHRunConfig), echoed into the manifest parameters.
 SUBSIDY_RATE_PER_M3 = 3.0
-GREEN_STUMPAGE_RATE = 30.0
-BURNED_STUMPAGE_RATE = 5.0
-GREEN_HARVEST_COST = 30.0
-BURNED_HARVEST_COST = 35.0
+GREEN_STUMPAGE_RATE = 15.0
+BURNED_STUMPAGE_RATE = 0.25
+GREEN_HARVEST_COST = 45.0
+BURNED_HARVEST_COST = 61.0
+TRANSPORT_COST_PER_M3 = 30.0
+BURNED_TRANSPORT_COST_PER_M3 = 41.0
 
-# Green prices (Interior timber market report values used by the predecessor).
+# Green prices ($/m3 FOB mill; BC Interior Log Market Report Q4-2023 anchors,
+# peeler = sawlog x 1.15 assumption, pulp at the market pulpwood level).
 GREEN_PRICES = {
-    "SPF_Sawlog": 200,
-    "SPF_Peelers": 180,
-    "SPF_Pulpwood": 150,
-    "Df-Larch_Sawlog": 220,
-    "Df-Larch_Peelers": 200,
-    "Df-Larch_Pulpwood": 100,
-    "Hem-Bal_Sawlog": 210,
-    "Hem-Bal_Peelers": 190,
-    "Hem-Bal_Pulpwood": 110,
-    "Cedar_Sawlog": 250,
-    "Cedar_Peelers": 230,
-    "Cedar_Pulpwood": 120,
+    "SPF_Sawlog": 127,
+    "SPF_Peelers": 146,
+    "SPF_Pulpwood": 55,
+    "Df-Larch_Sawlog": 103,
+    "Df-Larch_Peelers": 118,
+    "Df-Larch_Pulpwood": 55,
+    "Hem-Bal_Sawlog": 120,
+    "Hem-Bal_Peelers": 138,
+    "Hem-Bal_Pulpwood": 55,
+    "Cedar_Sawlog": 144,
+    "Cedar_Peelers": 166,
+    "Cedar_Pulpwood": 55,
     "Other": 90,
 }
 
-# Burned prices: fire damage reduces stumpage; 35% discount on green prices.
+# Burned prices: fire damage reduces value; 35% discount on green prices.
 BURNED_PRICE_DISCOUNT = 0.65
 BURNED_PRICES = {key: value * BURNED_PRICE_DISCOUNT for key, value in GREEN_PRICES.items()}
 
@@ -405,18 +413,22 @@ def ingest(scenario: ScenarioRunConfig) -> IngestResult:
     for column, values in grade_columns.items():
         frame[column] = values
 
+    economics = scenario.economics
+    burned_prices = economics.burned_prices()
     frame["Total_Green_Vol"] = frame[GRADE_COLUMNS].sum(axis=1)
     frame["Total_Burned_Vol"] = frame[BURNED_GRADE_COLUMNS].sum(axis=1)
-    frame["Subsidy_Rate"] = SUBSIDY_RATE_PER_M3
-    frame["Green_Stumpage_Rate"] = GREEN_STUMPAGE_RATE
-    frame["Burned_Stumpage_Rate"] = BURNED_STUMPAGE_RATE
-    frame["Subsidy_Total"] = frame["Total_Burned_Vol"] * SUBSIDY_RATE_PER_M3
-    frame["Stumpage_Green_Total"] = frame["Total_Green_Vol"] * GREEN_STUMPAGE_RATE
-    frame["Stumpage_Burned_Total"] = frame["Total_Burned_Vol"] * BURNED_STUMPAGE_RATE
-    frame["Harvest_Cost_Green"] = GREEN_HARVEST_COST
-    frame["Harvest_Cost_Burned"] = BURNED_HARVEST_COST
-    frame["green_prices"] = json.dumps(GREEN_PRICES, sort_keys=True)
-    frame["burned_prices"] = json.dumps(BURNED_PRICES, sort_keys=True)
+    frame["Subsidy_Rate"] = economics.subsidy_rate_per_m3
+    frame["Green_Stumpage_Rate"] = economics.green_stumpage_rate
+    frame["Burned_Stumpage_Rate"] = economics.burned_stumpage_rate
+    frame["Subsidy_Total"] = frame["Total_Burned_Vol"] * economics.subsidy_rate_per_m3
+    frame["Stumpage_Green_Total"] = frame["Total_Green_Vol"] * economics.green_stumpage_rate
+    frame["Stumpage_Burned_Total"] = (
+        frame["Total_Burned_Vol"] * economics.burned_stumpage_rate
+    )
+    frame["Harvest_Cost_Green"] = economics.green_harvest_cost
+    frame["Harvest_Cost_Burned"] = economics.burned_harvest_cost
+    frame["green_prices"] = json.dumps(economics.green_prices, sort_keys=True)
+    frame["burned_prices"] = json.dumps(burned_prices, sort_keys=True)
 
     _attach_zone_and_development_type(frame, diagnostics)
     frame = frame.loc[:, OUTPUT_COLUMNS]
@@ -444,7 +456,7 @@ def ingest(scenario: ScenarioRunConfig) -> IngestResult:
         green_volume=green_volume,
         per_bec_zone_counts=per_bec_zone_counts,
         per_development_type_counts=per_development_type_counts,
-        parameters=_parameters(severity),
+        parameters=_parameters(severity, economics),
         diagnostics=diagnostics,
     )
     manifest.write_json(manifest_path)
@@ -740,7 +752,7 @@ def _sorted_counts(frame: pd.DataFrame, column: str) -> dict[str, int]:
     return {str(key): int(count) for key, count in sorted(frame[column].value_counts().items())}
 
 
-def _parameters(severity: SeverityMapping) -> dict[str, object]:
+def _parameters(severity: SeverityMapping, economics: Economics) -> dict[str, object]:
     """Return the parameter surface recorded in the run manifest."""
 
     return {
@@ -760,14 +772,16 @@ def _parameters(severity: SeverityMapping) -> dict[str, object]:
         },
         "burned_grade_transition": BURNED_GRADE_TRANSITION,
         "species_grade_split": SPECIES_GRADE_SPLIT,
-        "subsidy_rate_per_m3": SUBSIDY_RATE_PER_M3,
-        "green_stumpage_rate": GREEN_STUMPAGE_RATE,
-        "burned_stumpage_rate": BURNED_STUMPAGE_RATE,
-        "green_harvest_cost": GREEN_HARVEST_COST,
-        "burned_harvest_cost": BURNED_HARVEST_COST,
-        "burned_price_discount": BURNED_PRICE_DISCOUNT,
-        "green_prices": GREEN_PRICES,
-        "burned_prices": BURNED_PRICES,
+        "subsidy_rate_per_m3": economics.subsidy_rate_per_m3,
+        "green_stumpage_rate": economics.green_stumpage_rate,
+        "burned_stumpage_rate": economics.burned_stumpage_rate,
+        "green_harvest_cost": economics.green_harvest_cost,
+        "burned_harvest_cost": economics.burned_harvest_cost,
+        "green_transport_cost_per_m3": economics.green_transport_cost_per_m3,
+        "burned_transport_cost_per_m3": economics.burned_transport_cost_per_m3,
+        "burned_price_discount": economics.burned_price_discount,
+        "green_prices": dict(economics.green_prices),
+        "burned_prices": economics.burned_prices(),
     }
 
 
@@ -796,6 +810,7 @@ __all__ = [
     "BURNED_PRICE_DISCOUNT",
     "BURNED_PRICES",
     "BURNED_STUMPAGE_RATE",
+    "BURNED_TRANSPORT_COST_PER_M3",
     "COVERAGE_DENOMINATOR_COLUMN",
     "COVERAGE_NUMERATOR_COLUMN",
     "ECONOMIC_OUTPUT_COLUMNS",
@@ -815,6 +830,7 @@ __all__ = [
     "SPECIES_GROUP_MAP",
     "SPECIES_SLOT_COLUMNS",
     "SUBSIDY_RATE_PER_M3",
+    "TRANSPORT_COST_PER_M3",
     "UNKNOWN_SEVERITY_FRAC",
     "UNKNOWN_SEVERITY_LABEL",
     "UNKNOWN_SPECIES_GROUP",

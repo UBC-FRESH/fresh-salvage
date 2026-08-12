@@ -95,6 +95,7 @@ import pandas as pd
 from fresh_salvage import agent, fire, principal, ws3
 from fresh_salvage.models import (
     ArtifactLayout,
+    Economics,
     RHManifest,
     RHResult,
     RHRunConfig,
@@ -471,9 +472,22 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
 
     # Boundary parse, once per run: stands economics and yield curves are
     # static inputs (config caching); only the cohort ARE section changes.
+    # The configured economic surface (prices, harvest/transport costs,
+    # stumpage rates, subsidy) is assembled once from the flat RHRunConfig
+    # fields and threaded through the principal/agent cohort parsers and the
+    # agent LP margins.
+    economics = config.economics()
     stands = principal._read_table(config.stands_path, "rh_stands_missing")
-    principal_economics = principal._development_type_economics(stands)
-    agent_economics = agent._development_type_economics(stands)
+    principal_economics = principal._development_type_economics(
+        stands,
+        green_prices=economics.green_prices,
+        burned_price_discount=economics.burned_price_discount,
+    )
+    agent_economics = agent._development_type_economics(
+        stands,
+        green_prices=economics.green_prices,
+        burned_price_discount=economics.burned_price_discount,
+    )
     curves = principal._yield_curves(Path(config.yields_path))
     age_caps = curve_age_caps(
         curves, width=config.age_smashing.width, midpoint=config.age_smashing.midpoint
@@ -495,6 +509,7 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
                 layout=layout,
                 principal_economics=principal_economics,
                 agent_economics=agent_economics,
+                economics=economics,
                 curves=curves,
                 age_caps=age_caps,
                 verbose=verbose,
@@ -577,6 +592,7 @@ def _run_step(
     layout: ArtifactLayout,
     principal_economics: dict[str, dict[str, float]],
     agent_economics: dict[str, dict[str, float]],
+    economics: Economics,
     curves: dict[int, tuple[object, object]],
     age_caps: dict[int, int],
     verbose: bool,
@@ -624,7 +640,7 @@ def _run_step(
             are_path,
             principal_economics,
             curves,
-            subsidy_rate_per_m3=config.subsidy_rate_per_m3,
+            economics=economics,
             burn_rate_multiplier=config.burn_rate_multiplier,
         )
         ceilings = [
@@ -664,7 +680,7 @@ def _run_step(
             horizon=config.period_length,
             decay_rate=config.decay_rate,
             discount_rate=config.discount_rate,
-            subsidy_rate_per_m3=config.subsidy_rate_per_m3,
+            economics=economics,
             run_id=f"{step_slug}-agent",
         )
         decisions_path = layout.data_path(f"{step_slug}-decisions", ext="parquet")

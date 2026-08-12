@@ -56,11 +56,14 @@ Objective (maximize agent NPV, ``df_t = 1 / (1 + discount_rate) ** t``)::
     sum_{c,t} df_t * standing_volume_m3[c] * (
         green_margin_m3[c] * H[c,t] + salvage_margin_m3[c] * S[c,t])
 
-with ``green_margin_m3 = green_price - GREEN_HARVEST_COST -
-GREEN_STUMPAGE_RATE`` and ``salvage_margin_m3 = burned_price -
-BURNED_HARVEST_COST - BURNED_STUMPAGE_RATE + SUBSIDY_RATE_PER_M3`` (prices
-are the development type's volume-weighted average grade prices from
-``data.py``; the subsidy accrues per m3 of burned volume actually salvaged).
+with ``green_margin_m3 = green_price - green_harvest_cost -
+green_transport_cost - green_stumpage_rate`` and ``salvage_margin_m3 =
+burned_price - burned_harvest_cost - burned_transport_cost -
+burned_stumpage_rate + subsidy_rate_per_m3`` (prices are the development
+type's volume-weighted average grade prices, weighted by the configured
+``economics.green_prices`` with burned prices at the configured discount; the
+economic surface defaults to the calibrated ``data.py`` constants and the
+subsidy accrues per m3 of burned volume actually salvaged).
 
 Documented deviations from the prototype
 ----------------------------------------
@@ -108,15 +111,10 @@ import pandas as pd
 from fresh_salvage import fire
 from fresh_salvage.data import (
     BURNED_GRADE_COLUMNS,
-    BURNED_HARVEST_COST,
-    BURNED_PRICES,
-    BURNED_STUMPAGE_RATE,
+    BURNED_PRICE_DISCOUNT,
     GRADE_COLUMNS,
-    GREEN_HARVEST_COST,
     GREEN_PRICES,
-    GREEN_STUMPAGE_RATE,
     SPECIES_GROUP_MAP,
-    SUBSIDY_RATE_PER_M3,
     UNKNOWN_SPECIES_GROUP,
 )
 from fresh_salvage.models import (
@@ -126,6 +124,7 @@ from fresh_salvage.models import (
     AgentRunConfig,
     AgentYearVolumes,
     ArtifactLayout,
+    Economics,
     safe_slug,
 )
 from fresh_salvage.principal import OFFER_REPORTING_TOLERANCE
@@ -189,9 +188,13 @@ def load_cohorts(config: AgentRunConfig) -> list[AgentCohort]:
     """
 
     stands = _read_table(config.stands_path, "agent_stands_missing")
-    economics = _development_type_economics(stands)
+    price_by_dt = _development_type_economics(
+        stands,
+        green_prices=config.economics.green_prices,
+        burned_price_discount=config.economics.burned_price_discount,
+    )
     curves = _yield_curves(Path(config.yields_path))
-    return _parse_are_cohorts(Path(config.are_path), economics, curves)
+    return _parse_are_cohorts(Path(config.are_path), price_by_dt, curves)
 
 
 def resolve_offers(
@@ -273,7 +276,7 @@ def build_agent_lp(
     horizon: int,
     decay_rate: float = fire.DEFAULT_BURNED_DECAY_RATE,
     discount_rate: float = 0.03,
-    subsidy_rate_per_m3: float = SUBSIDY_RATE_PER_M3,
+    economics: Economics | None = None,
 ) -> AgentLP:
     """Build the continuous agent harvest/salvage LP as a HiGHS model.
 
@@ -281,10 +284,12 @@ def build_agent_lp(
     columns, then all ``S``, ``V``, ``B`` columns, each block of size
     ``len(cohorts) * horizon``. ``H[c,t]``/``S[c,t]`` carry the offered
     fractions as upper bounds; ``V``/``B`` are bounded to ``[0, 1]``.
-    ``subsidy_rate_per_m3`` is the per-m3 salvage subsidy added to the
-    salvage margin (defaults to the shared ``data.py`` constant).
+    ``economics`` carries the price/cost/rate surface of the margin
+    coefficients (defaults to the calibrated ``data.py`` constants).
     """
 
+    if economics is None:
+        economics = Economics()
     if not cohorts:
         raise AgentError("agent_no_cohorts", "at least one cohort is required")
     if horizon <= 0:
@@ -336,13 +341,17 @@ def build_agent_lp(
     costs = np.zeros(total_columns)
     for c_index, cohort in enumerate(cohorts):
         green_margin = (
-            cohort.green_price_m3 - GREEN_HARVEST_COST - GREEN_STUMPAGE_RATE
+            cohort.green_price_m3
+            - economics.green_harvest_cost
+            - economics.green_transport_cost_per_m3
+            - economics.green_stumpage_rate
         )
         salvage_margin = (
             cohort.burned_price_m3
-            - BURNED_HARVEST_COST
-            - BURNED_STUMPAGE_RATE
-            + subsidy_rate_per_m3
+            - economics.burned_harvest_cost
+            - economics.burned_transport_cost_per_m3
+            - economics.burned_stumpage_rate
+            + economics.subsidy_rate_per_m3
         )
         base = c_index * horizon
         for year in range(horizon):
@@ -461,7 +470,7 @@ def solve_agent(
     horizon: int,
     decay_rate: float = fire.DEFAULT_BURNED_DECAY_RATE,
     discount_rate: float = 0.03,
-    subsidy_rate_per_m3: float = SUBSIDY_RATE_PER_M3,
+    economics: Economics | None = None,
     run_id: str = "agent-solve",
 ) -> AgentResult:
     """Build and solve the agent LP; return the typed result.
@@ -476,7 +485,7 @@ def solve_agent(
         horizon=horizon,
         decay_rate=decay_rate,
         discount_rate=discount_rate,
-        subsidy_rate_per_m3=subsidy_rate_per_m3,
+        economics=economics,
     )
     solve_started = time.monotonic()
     built.model.run()
@@ -597,6 +606,7 @@ def run_agent(config: AgentRunConfig) -> AgentResult:
         horizon=config.horizon,
         decay_rate=config.decay_rate,
         discount_rate=config.discount_rate,
+        economics=config.economics,
         run_id=config.run_id,
     )
 
@@ -668,13 +678,29 @@ def _read_table(path: Path, code: str) -> pd.DataFrame:
     )
 
 
-def _development_type_economics(frame: pd.DataFrame) -> dict[str, dict[str, float]]:
+def _development_type_economics(
+    frame: pd.DataFrame,
+    *,
+    green_prices: dict[str, float] | None = None,
+    burned_price_discount: float | None = None,
+) -> dict[str, dict[str, float]]:
     """Aggregate the stands table into per-development-type prices.
 
     Returns ``{development_type: {"green_price": ..., "burned_price": ...}}``
     with volume-weighted average grade prices ($/m3) over the green and
-    burned grade columns.
+    burned grade columns. ``green_prices``/``burned_price_discount`` are the
+    configured price surface (defaults: the calibrated ``data.py``
+    constants); burned prices are derived as green x discount, matching
+    ``data.BURNED_PRICES``.
     """
+
+    if green_prices is None:
+        green_prices = GREEN_PRICES
+    if burned_price_discount is None:
+        burned_price_discount = BURNED_PRICE_DISCOUNT
+    burned_prices = {
+        key: value * burned_price_discount for key, value in green_prices.items()
+    }
 
     required = {
         "development_type",
@@ -698,12 +724,12 @@ def _development_type_economics(frame: pd.DataFrame) -> dict[str, dict[str, floa
         green_value = 0.0
         for column in GRADE_COLUMNS:
             price_key = column[: -len("_Vol")]
-            green_value += float(group[column].sum()) * GREEN_PRICES[price_key]
+            green_value += float(group[column].sum()) * green_prices[price_key]
         burned = float(group["Total_Burned_Vol"].sum())
         burned_value = 0.0
         for column in BURNED_GRADE_COLUMNS:
             price_key = column[len("B_") : -len("_Vol")]
-            burned_value += float(group[column].sum()) * BURNED_PRICES[price_key]
+            burned_value += float(group[column].sum()) * burned_prices[price_key]
         economics[str(development_type)] = {
             "green_price": green_value / green,
             "burned_price": burned_value / burned if burned > 0.0 else 0.0,
@@ -763,7 +789,7 @@ def _development_type_from_stratum(stratum_code: str) -> str:
 
 def _parse_are_cohorts(
     are_path: Path,
-    economics: dict[str, dict[str, float]],
+    price_by_dt: dict[str, dict[str, float]],
     curves: dict[int, tuple[np.ndarray, np.ndarray]],
     *,
     burn_rate_multiplier: float = 1.0,
@@ -811,7 +837,7 @@ def _parse_are_cohorts(
                 f"{are_path} line {line_number} carries a malformed stratum code: "
                 f"{exc}",
             ) from exc
-        if development_type not in economics:
+        if development_type not in price_by_dt:
             raise AgentError(
                 "agent_stratum_unmapped",
                 f"stratum {stratum_code!r} maps to development type "
@@ -841,8 +867,8 @@ def _parse_are_cohorts(
                 area_ha=area_ha,
                 standing_volume_m3=standing_volume_m3,
                 burn_rate=burn_rate,
-                green_price_m3=economics[development_type]["green_price"],
-                burned_price_m3=economics[development_type]["burned_price"],
+                green_price_m3=price_by_dt[development_type]["green_price"],
+                burned_price_m3=price_by_dt[development_type]["burned_price"],
             )
         )
     if not cohorts:

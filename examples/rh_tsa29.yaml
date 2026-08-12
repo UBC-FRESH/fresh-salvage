@@ -37,6 +37,11 @@ aac_annual_m3: 2937509
 decay_rate: 0.85
 discount_rate: 0.03
 burned_limit_annual_m3: null
+# The calibrated economic surface (planning/economics-calibration.md) is
+# carried on flat RHRunConfig fields — subsidy_rate_per_m3, green_prices,
+# burned_price_discount, green/burned_harvest_cost,
+# green/burned_transport_cost_per_m3, green/burned_stumpage_rate — each a
+# valid ensemble axis. Omitted here: the calibrated data.py defaults apply.
 output_root: outputs/rh_100yr_dev
 metadata:
   description: 100-year rolling-horizon WS3-principal-agent coupled run (10 x 10-year steps, 15-period WS3 solves).

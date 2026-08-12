@@ -34,8 +34,9 @@ parses, at the boundary:
   ``burn_share[dt] = Total_Burned_Vol / Total_Green_Vol`` aggregated over the
   Phase 2a stands of the cohort's development type (stratum
   ``{bec}_{species}`` -> ``{species_group}_{BEC}``);
-- ``cashflow[c]`` (stumpage net of subsidy, rates from ``data.py``) and
-  ``burned_value[c]`` (burned volume priced at the DT's volume-weighted
+- ``cashflow[c]`` (stumpage net of subsidy, rates from the configured
+  ``economics`` surface, defaulting to the calibrated ``data.py`` constants)
+  and ``burned_value[c]`` (burned volume priced at the DT's volume-weighted
   average burned price);
 - ``burn_rate[c] = 1 / MFRI[bec_zone]`` from ``fire.py``.
 
@@ -101,15 +102,14 @@ import pandas as pd
 from fresh_salvage import fire
 from fresh_salvage.data import (
     BURNED_GRADE_COLUMNS,
-    BURNED_PRICES,
-    BURNED_STUMPAGE_RATE,
-    GREEN_STUMPAGE_RATE,
+    BURNED_PRICE_DISCOUNT,
+    GREEN_PRICES,
     SPECIES_GROUP_MAP,
-    SUBSIDY_RATE_PER_M3,
     UNKNOWN_SPECIES_GROUP,
 )
 from fresh_salvage.models import (
     ArtifactLayout,
+    Economics,
     PrincipalManifest,
     PrincipalOfferRecord,
     PrincipalResult,
@@ -170,9 +170,15 @@ def load_cohorts(config: PrincipalRunConfig) -> list[PrincipalCohort]:
     """
 
     stands = _read_table(config.stands_path, "principal_stands_missing")
-    economics = _development_type_economics(stands)
+    price_by_dt = _development_type_economics(
+        stands,
+        green_prices=config.economics.green_prices,
+        burned_price_discount=config.economics.burned_price_discount,
+    )
     curves = _yield_curves(Path(config.yields_path))
-    return _parse_are_cohorts(Path(config.are_path), economics, curves)
+    return _parse_are_cohorts(
+        Path(config.are_path), price_by_dt, curves, economics=config.economics
+    )
 
 
 def build_principal_lp(
@@ -505,13 +511,29 @@ def _read_table(path: Path, code: str) -> pd.DataFrame:
     )
 
 
-def _development_type_economics(frame: pd.DataFrame) -> dict[str, dict[str, float]]:
+def _development_type_economics(
+    frame: pd.DataFrame,
+    *,
+    green_prices: dict[str, float] | None = None,
+    burned_price_discount: float | None = None,
+) -> dict[str, dict[str, float]]:
     """Aggregate the stands table into per-development-type burned shares.
 
     Returns ``{development_type: {"burn_share": ..., "burned_price": ...}}``
     where ``burn_share`` is Total_Burned_Vol over Total_Green_Vol and
     ``burned_price`` is the volume-weighted average burned price ($/m3).
+    ``green_prices``/``burned_price_discount`` are the configured price
+    surface (defaults: the calibrated ``data.py`` constants); burned prices
+    are derived as green x discount, matching ``data.BURNED_PRICES``.
     """
+
+    if green_prices is None:
+        green_prices = GREEN_PRICES
+    if burned_price_discount is None:
+        burned_price_discount = BURNED_PRICE_DISCOUNT
+    burned_prices = {
+        key: value * burned_price_discount for key, value in green_prices.items()
+    }
 
     required = {
         "development_type",
@@ -535,7 +557,7 @@ def _development_type_economics(frame: pd.DataFrame) -> dict[str, dict[str, floa
         burned_value = 0.0
         for column in BURNED_GRADE_COLUMNS:
             price_key = column[len("B_") : -len("_Vol")]
-            burned_value += float(group[column].sum()) * BURNED_PRICES[price_key]
+            burned_value += float(group[column].sum()) * burned_prices[price_key]
         economics[str(development_type)] = {
             "burn_share": burned / green,
             "burned_price": burned_value / burned if burned > 0.0 else 0.0,
@@ -595,21 +617,24 @@ def _development_type_from_stratum(stratum_code: str) -> str:
 
 def _parse_are_cohorts(
     are_path: Path,
-    economics: dict[str, dict[str, float]],
+    price_by_dt: dict[str, dict[str, float]],
     curves: dict[int, tuple[np.ndarray, np.ndarray]],
     *,
-    subsidy_rate_per_m3: float = SUBSIDY_RATE_PER_M3,
+    economics: Economics | None = None,
     burn_rate_multiplier: float = 1.0,
 ) -> list[PrincipalCohort]:
     """Parse ARE data rows into cohort LP inputs (file order preserved).
 
-    ``subsidy_rate_per_m3`` is the per-m3 salvage subsidy charged against the
-    principal cashflow (defaults to the shared ``data.py`` constant) and
+    ``economics`` carries the configured price/cost/rate surface charged in
+    the principal cashflow (green/burned stumpage net of the per-m3 salvage
+    subsidy; defaults to the calibrated ``data.py`` constants) and
     ``burn_rate_multiplier`` scales every cohort's MFRI-derived annual burn
     rate; a scaled rate above 1.0 (a burn probability, not a rate ratio)
     fails fast at the boundary.
     """
 
+    if economics is None:
+        economics = Economics()
     if not are_path.is_file():
         raise PrincipalError(
             "principal_are_missing", f"ARE section not found: {are_path}"
@@ -645,7 +670,7 @@ def _parse_are_cohorts(
                 "principal_stratum_malformed",
                 f"{are_path} line {line_number} carries a malformed stratum code: {exc}",
             ) from exc
-        if development_type not in economics:
+        if development_type not in price_by_dt:
             raise PrincipalError(
                 "principal_stratum_unmapped",
                 f"stratum {stratum_code!r} maps to development type "
@@ -667,7 +692,7 @@ def _parse_are_cohorts(
                 f"(multiplier {burn_rate_multiplier}) exceeds 1.0",
             )
         standing_volume_m3 = area_ha * _curve_volume_m3_per_ha(curves, curve_id, age)
-        burn_share = economics[development_type]["burn_share"]
+        burn_share = price_by_dt[development_type]["burn_share"]
         burned_volume_m3 = standing_volume_m3 * burn_share
         cohorts.append(
             PrincipalCohort(
@@ -678,11 +703,11 @@ def _parse_are_cohorts(
                 green_volume_m3=standing_volume_m3,
                 burned_volume_m3=burned_volume_m3,
                 cashflow=(
-                    standing_volume_m3 * GREEN_STUMPAGE_RATE
-                    + burned_volume_m3 * BURNED_STUMPAGE_RATE
-                    - burned_volume_m3 * subsidy_rate_per_m3
+                    standing_volume_m3 * economics.green_stumpage_rate
+                    + burned_volume_m3 * economics.burned_stumpage_rate
+                    - burned_volume_m3 * economics.subsidy_rate_per_m3
                 ),
-                burned_value=burned_volume_m3 * economics[development_type]["burned_price"],
+                burned_value=burned_volume_m3 * price_by_dt[development_type]["burned_price"],
                 burn_rate=burn_rate,
             )
         )

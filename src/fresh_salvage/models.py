@@ -117,6 +117,125 @@ class SeverityMapping(BaseModel):
         return self
 
 
+def _default_economics_field(field_name: str) -> object:
+    """Return a shared ``data.py`` economic constant by name.
+
+    Deferred import: ``data`` already imports this module, so a module-level
+    import here would be circular.
+    """
+
+    from fresh_salvage import data
+
+    return getattr(data, field_name)
+
+
+def _default_green_prices() -> dict[str, float]:
+    """Return the shared green-price table default (deferred, see above)."""
+
+    return dict(_default_economics_field("GREEN_PRICES"))
+
+
+def _validate_green_prices(value: dict[str, float]) -> dict[str, float]:
+    """Fail at config parse time on an incomplete or misnamed price table.
+
+    The price keys are the volume-weighting keys of the ingestion grade
+    columns; a missing or misnamed key would silently reprice that grade
+    downstream, so the table must cover exactly the canonical key set.
+    """
+
+    from fresh_salvage.data import GRADE_COLUMNS
+
+    canonical = {column[: -len("_Vol")] for column in GRADE_COLUMNS}
+    keys = set(value)
+    if keys != canonical:
+        raise ValueError(
+            "green_prices keys must be exactly the canonical grade price keys "
+            f"{sorted(canonical)}; got {sorted(keys)}"
+        )
+    for label, price in value.items():
+        if not str(label).strip():
+            raise ValueError("green_prices labels must not be empty")
+        if price < 0:
+            raise ValueError("green_prices must be non-negative")
+    return value
+
+
+class Economics(BaseModel):
+    """Scenario-visible economic parameter set (price/cost/rate surface).
+
+    All values are $/m3 unless noted. Defaults are the calibrated
+    ``data.py`` constants (see planning/economics-calibration.md for the
+    per-parameter rationale and sources). ``burned_prices`` are not stored:
+    they are derived as ``green_prices x burned_price_discount``, the same
+    derivation as ``data.BURNED_PRICES``.
+    """
+
+    green_prices: dict[str, float] = Field(default_factory=_default_green_prices)
+    burned_price_discount: float = Field(
+        default_factory=lambda: float(
+            _default_economics_field("BURNED_PRICE_DISCOUNT")
+        )
+    )
+    green_harvest_cost: float = Field(
+        default_factory=lambda: float(_default_economics_field("GREEN_HARVEST_COST"))
+    )
+    burned_harvest_cost: float = Field(
+        default_factory=lambda: float(_default_economics_field("BURNED_HARVEST_COST"))
+    )
+    green_transport_cost_per_m3: float = Field(
+        default_factory=lambda: float(_default_economics_field("TRANSPORT_COST_PER_M3"))
+    )
+    burned_transport_cost_per_m3: float = Field(
+        default_factory=lambda: float(
+            _default_economics_field("BURNED_TRANSPORT_COST_PER_M3")
+        )
+    )
+    green_stumpage_rate: float = Field(
+        default_factory=lambda: float(_default_economics_field("GREEN_STUMPAGE_RATE"))
+    )
+    burned_stumpage_rate: float = Field(
+        default_factory=lambda: float(_default_economics_field("BURNED_STUMPAGE_RATE"))
+    )
+    subsidy_rate_per_m3: float = Field(
+        default_factory=lambda: float(_default_economics_field("SUBSIDY_RATE_PER_M3"))
+    )
+
+    @field_validator("green_prices")
+    @classmethod
+    def _validate_prices(cls, value: dict[str, float]) -> dict[str, float]:
+        return _validate_green_prices(value)
+
+    @field_validator("burned_price_discount")
+    @classmethod
+    def _validate_discount(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("burned_price_discount must lie in [0, 1]")
+        return value
+
+    @field_validator(
+        "green_harvest_cost",
+        "burned_harvest_cost",
+        "green_transport_cost_per_m3",
+        "burned_transport_cost_per_m3",
+        "green_stumpage_rate",
+        "burned_stumpage_rate",
+        "subsidy_rate_per_m3",
+    )
+    @classmethod
+    def _validate_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("economic parameters cannot be negative")
+        return value
+
+    def burned_prices(self) -> dict[str, float]:
+        """Return the derived burned price table (green x discount)."""
+
+        return {
+            key: value * self.burned_price_discount
+            for key, value in self.green_prices.items()
+        }
+
+
 class ScenarioRunConfig(BaseModel):
     """Configuration for one full-TSA ingestion run."""
 
@@ -124,6 +243,7 @@ class ScenarioRunConfig(BaseModel):
     inputs: ScenarioInputs
     fire: FireDefaults = Field(default_factory=FireDefaults)
     severity: SeverityMapping = Field(default_factory=SeverityMapping)
+    economics: Economics = Field(default_factory=Economics)
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("run_id")
@@ -379,6 +499,7 @@ class PrincipalRunConfig(BaseModel):
     aac_annual_m3: float = 2_937_509
     burned_limit_annual_m3: float | None = None
     decay_rate: float = 0.85
+    economics: Economics = Field(default_factory=Economics)
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
 
@@ -559,6 +680,7 @@ class AgentRunConfig(BaseModel):
     discount_rate: float = 0.03
     default_offer_fraction: float = 1.0
     offers_path: Path | None = None
+    economics: Economics = Field(default_factory=Economics)
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
 
@@ -883,6 +1005,18 @@ class RHRunConfig(BaseModel):
     ``burn_rate_multiplier`` scales every MFRI-derived annual burn rate
     (1.0 = the MFRI table as published; 0.0 = a fire-free counterfactual);
     it is the ensemble axis for future-fire-pattern assumptions.
+
+    The remaining economic surface (prices, harvest/transport costs,
+    stumpage rates, burned price discount) is carried as FLAT fields —
+    ``green_prices``, ``burned_price_discount``, ``green_harvest_cost``,
+    ``burned_harvest_cost``, ``green_transport_cost_per_m3``,
+    ``burned_transport_cost_per_m3``, ``green_stumpage_rate``,
+    ``burned_stumpage_rate`` — so the ensemble driver can vary any of them
+    as a named axis (axes must be ``RHRunConfig`` field names). They default
+    to the calibrated ``data.py`` constants and are assembled into an
+    :class:`Economics` record by :meth:`economics` for the principal/agent
+    LPs. (The standalone ``PrincipalRunConfig``/``AgentRunConfig`` carry the
+    same surface as a nested ``economics`` section instead.)
     """
 
     run_id: str = "tsa29-rh"
@@ -902,6 +1036,32 @@ class RHRunConfig(BaseModel):
     discount_rate: float = 0.03
     burned_limit_annual_m3: float | None = None
     subsidy_rate_per_m3: float = Field(default_factory=_default_subsidy_rate_per_m3)
+    green_prices: dict[str, float] = Field(default_factory=_default_green_prices)
+    burned_price_discount: float = Field(
+        default_factory=lambda: float(
+            _default_economics_field("BURNED_PRICE_DISCOUNT")
+        )
+    )
+    green_harvest_cost: float = Field(
+        default_factory=lambda: float(_default_economics_field("GREEN_HARVEST_COST"))
+    )
+    burned_harvest_cost: float = Field(
+        default_factory=lambda: float(_default_economics_field("BURNED_HARVEST_COST"))
+    )
+    green_transport_cost_per_m3: float = Field(
+        default_factory=lambda: float(_default_economics_field("TRANSPORT_COST_PER_M3"))
+    )
+    burned_transport_cost_per_m3: float = Field(
+        default_factory=lambda: float(
+            _default_economics_field("BURNED_TRANSPORT_COST_PER_M3")
+        )
+    )
+    green_stumpage_rate: float = Field(
+        default_factory=lambda: float(_default_economics_field("GREEN_STUMPAGE_RATE"))
+    )
+    burned_stumpage_rate: float = Field(
+        default_factory=lambda: float(_default_economics_field("BURNED_STUMPAGE_RATE"))
+    )
     burn_rate_multiplier: float = 1.0
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -958,12 +1118,53 @@ class RHRunConfig(BaseModel):
             raise ValueError("subsidy_rate_per_m3 cannot be negative")
         return value
 
+    @field_validator("green_prices")
+    @classmethod
+    def _validate_rh_green_prices(cls, value: dict[str, float]) -> dict[str, float]:
+        return _validate_green_prices(value)
+
+    @field_validator("burned_price_discount")
+    @classmethod
+    def _validate_rh_burned_price_discount(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("burned_price_discount must lie in [0, 1]")
+        return value
+
+    @field_validator(
+        "green_harvest_cost",
+        "burned_harvest_cost",
+        "green_transport_cost_per_m3",
+        "burned_transport_cost_per_m3",
+        "green_stumpage_rate",
+        "burned_stumpage_rate",
+    )
+    @classmethod
+    def _validate_rh_economic_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("economic parameters cannot be negative")
+        return value
+
     @field_validator("burn_rate_multiplier")
     @classmethod
     def _validate_burn_rate_multiplier(cls, value: float) -> float:
         if value < 0:
             raise ValueError("burn_rate_multiplier cannot be negative")
         return value
+
+    def economics(self) -> Economics:
+        """Assemble the flat economic fields into an ``Economics`` record."""
+
+        return Economics(
+            green_prices=dict(self.green_prices),
+            burned_price_discount=self.burned_price_discount,
+            green_harvest_cost=self.green_harvest_cost,
+            burned_harvest_cost=self.burned_harvest_cost,
+            green_transport_cost_per_m3=self.green_transport_cost_per_m3,
+            burned_transport_cost_per_m3=self.burned_transport_cost_per_m3,
+            green_stumpage_rate=self.green_stumpage_rate,
+            burned_stumpage_rate=self.burned_stumpage_rate,
+            subsidy_rate_per_m3=self.subsidy_rate_per_m3,
+        )
 
     def write_json(self, path: Path) -> Path:
         """Write this config as formatted JSON."""
@@ -1291,6 +1492,7 @@ __all__ = [
     "ArtifactLayout",
     "DevelopmentType",
     "Diagnostic",
+    "Economics",
     "EnsembleConfig",
     "EnsembleManifest",
     "EnsembleResult",
