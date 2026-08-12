@@ -467,6 +467,194 @@ class PrincipalResult(BaseModel):
         }
 
 
+class AgentRunConfig(BaseModel):
+    """Configuration for one agent-LP solve at cohort granularity.
+
+    Mirrors :class:`PrincipalRunConfig`: same boundary inputs (stands, ARE
+    cohorts, yields), 1-year timesteps counted by ``horizon``. Offered
+    fractions are an input: either ``offers_path`` (a principal offer table
+    with ``cohort_id``/``year``/``offer_fraction`` columns) or a uniform
+    ``default_offer_fraction`` applied to every cohort-year. ``decay_rate``
+    is the annual retention of unsalvaged burned volume and
+    ``discount_rate`` drives the NPV divisor ``(1 + discount_rate) ** year``.
+    """
+
+    run_id: str = "tsa29-agent"
+    stands_path: Path
+    are_path: Path
+    yields_path: Path
+    horizon: int = 10
+    decay_rate: float = 0.85
+    discount_rate: float = 0.03
+    default_offer_fraction: float = 1.0
+    offers_path: Path | None = None
+    output_root: Path
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("run_id")
+    @classmethod
+    def _validate_run_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("run_id must not be empty")
+        return text
+
+    @field_validator("horizon")
+    @classmethod
+    def _validate_horizon(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("horizon must be a positive number of 1-year timesteps")
+        return value
+
+    @field_validator("decay_rate", "default_offer_fraction")
+    @classmethod
+    def _validate_fraction(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("fraction parameters must lie in [0, 1]")
+        return value
+
+    @field_validator("discount_rate")
+    @classmethod
+    def _validate_discount_rate(cls, value: float) -> float:
+        if value < 0.0:
+            raise ValueError("discount_rate cannot be negative")
+        return value
+
+    def write_json(self, path: Path) -> Path:
+        """Write this config as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read(cls, path: Path) -> AgentRunConfig:
+        """Read an agent run config from JSON or YAML."""
+
+        path = Path(path)
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return cls.model_validate(_load_yaml(text))
+        return cls.model_validate_json(text)
+
+
+class AgentDecisionRecord(BaseModel):
+    """One (cohort, year) agent action, emitted including zeros."""
+
+    cohort_id: str
+    year: int = Field(ge=1)
+    harvest_fraction: float = Field(ge=0.0, le=1.0)
+    salvage_fraction: float = Field(ge=0.0, le=1.0)
+    harvest_volume_m3: float = Field(ge=0.0)
+    salvage_volume_m3: float = Field(ge=0.0)
+
+
+class AgentYearVolumes(BaseModel):
+    """Aggregate agent-side volumes (m3) of one timestep.
+
+    ``live_volume_m3``/``burned_volume_m3`` are end-of-year inventories;
+    ``burn_influx_m3`` is the volume that burned during the year after the
+    year's harvest was removed.
+    """
+
+    year: int = Field(ge=1)
+    harvest_volume_m3: float = Field(ge=0.0)
+    salvage_volume_m3: float = Field(ge=0.0)
+    burn_influx_m3: float = Field(ge=0.0)
+    live_volume_m3: float = Field(ge=0.0)
+    burned_volume_m3: float = Field(ge=0.0)
+
+
+class AgentManifest(BaseModel):
+    """Evidence manifest for one agent-LP solve."""
+
+    manifest_version: str = MANIFEST_VERSION
+    run_id: str
+    stands_path: Path
+    are_path: Path
+    yields_path: Path
+    offers_path: Path | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    status: str
+    horizon: int = Field(ge=1)
+    cohorts: int = Field(ge=0)
+    objective_value: float
+    active_cohort_years: int = Field(ge=0)
+    lp_rows: int = Field(default=0, ge=0)
+    lp_columns: int = Field(default=0, ge=0)
+    solve_seconds: float = Field(ge=0.0)
+    source_sha256: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, object] = Field(default_factory=dict)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def write_json(self, path: Path) -> Path:
+        """Write this manifest as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read_json(cls, path: Path) -> AgentManifest:
+        """Read a run manifest from JSON."""
+
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+class AgentResult(BaseModel):
+    """Typed result of one agent-LP solve."""
+
+    run_id: str
+    status: str
+    horizon: int = Field(ge=1)
+    cohorts: int = Field(ge=0)
+    objective_value: float
+    decisions: list[AgentDecisionRecord] = Field(default_factory=list)
+    per_year_volumes: list[AgentYearVolumes] = Field(default_factory=list)
+    active_cohort_years: int = Field(ge=0)
+    lp_rows: int = Field(default=0, ge=0)
+    lp_columns: int = Field(default=0, ge=0)
+    solve_seconds: float = Field(ge=0.0)
+    data_path: Path | None = None
+    csv_path: Path | None = None
+    manifest_path: Path | None = None
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def summary(self) -> dict[str, object]:
+        """Return a deterministic, JSON-friendly run summary."""
+
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "horizon": self.horizon,
+            "cohorts": self.cohorts,
+            "objective_value": round(self.objective_value, 2),
+            "active_cohort_years": self.active_cohort_years,
+            "per_year_volumes_m3": {
+                str(volumes.year): {
+                    "harvest": round(volumes.harvest_volume_m3, 2),
+                    "salvage": round(volumes.salvage_volume_m3, 2),
+                    "burn_influx": round(volumes.burn_influx_m3, 2),
+                    "live_end": round(volumes.live_volume_m3, 2),
+                    "burned_end": round(volumes.burned_volume_m3, 2),
+                }
+                for volumes in self.per_year_volumes
+            },
+            "lp_rows": self.lp_rows,
+            "lp_columns": self.lp_columns,
+            "solve_seconds": round(self.solve_seconds, 3),
+            "artifacts": {
+                "data": str(self.data_path),
+                "csv": str(self.csv_path),
+                "manifest": str(self.manifest_path),
+            },
+            "diagnostics": [diagnostic.model_dump() for diagnostic in self.diagnostics],
+        }
+
+
 class IngestManifest(BaseModel):
     """Evidence manifest for one ingestion run."""
 
@@ -614,6 +802,11 @@ def _load_yaml(text: str) -> object:
 
 __all__ = [
     "ARTIFACT_DIRECTORIES",
+    "AgentDecisionRecord",
+    "AgentManifest",
+    "AgentResult",
+    "AgentRunConfig",
+    "AgentYearVolumes",
     "AgeSmashing",
     "ArtifactLayout",
     "DevelopmentType",

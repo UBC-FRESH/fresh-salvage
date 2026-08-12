@@ -1,0 +1,31 @@
+# Local example agent-LP run config for the full TSA29.
+#
+# The paths below are machine-relative outputs of the earlier phases: the
+# Phase 2a stands table (fresh-salvage ingest) and the derived WS3 bridge
+# staging of a ws3-run (ARE cohort section + femic stage-1 yields). Inputs
+# are never vendored in this repository; replace the paths with your own run
+# outputs before solving.
+#
+# The offered fractions are an input: offers_path: null means every cohort is
+# fully offered every year (default_offer_fraction 1.0). Point offers_path at
+# a principal-run offers table (parquet or csv with cohort_id, year,
+# offer_fraction columns) to solve the agent side against actual principal
+# offers; Phase 5 wires that coupling directly.
+#
+# Production profile (horizon 10 = one rolling-horizon step):
+#   fresh-salvage agent-run examples/agent_tsa29.yaml
+#
+# Dev-mode timing profile: set horizon to 15 and re-run; the full-TSA solve
+# (1,608 cohorts) should finish well under 60 seconds.
+run_id: tsa29-agent
+stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
+are_path: outputs/ws3_full_tsa/derived/ws3_bridge_no_lu/femic_tsa_ws3.are
+yields_path: outputs/ws3_full_tsa/derived/woodstock_no_lu_smashed/woodstock_yields.csv
+horizon: 10
+decay_rate: 0.85
+discount_rate: 0.03
+default_offer_fraction: 1.0
+offers_path: null
+output_root: outputs/agent_full_tsa
+metadata:
+  description: Full-TSA29 agent harvest/salvage LP with annual MFRI fire dynamics.

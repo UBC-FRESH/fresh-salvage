@@ -8,8 +8,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fresh_salvage import __version__, data, principal, ws3
+from fresh_salvage import __version__, agent, data, principal, ws3
 from fresh_salvage.models import (
+    AgentResult,
+    AgentRunConfig,
     Diagnostic,
     IngestResult,
     PrincipalResult,
@@ -145,15 +147,34 @@ def principal_run(
     _print_principal_summary(result, json_output)
 
 
-@app.command(name="solve-agent")
-def solve_agent(
+@app.command(name="agent-run")
+def agent_run(
+    config_path: Annotated[
+        Path,
+        typer.Argument(help="Path to an agent run YAML or JSON config."),
+    ],
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit deterministic JSON output."),
     ] = False,
 ) -> None:
-    """Solve the agent-side linear HiGHS LP."""
-    _stub_exit("solve-agent", json_output)
+    """Build and solve the agent harvest/salvage LP over offered cohorts."""
+    try:
+        config = AgentRunConfig.read(config_path)
+        result = agent.run_agent(config)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code=getattr(exc, "code", "agent_run_failed"),
+            message=str(exc),
+            context={
+                "config_path": str(config_path),
+                "exception_type": type(exc).__name__,
+            },
+        )
+        _print_failure(diagnostic, json_output, command="agent-run")
+        raise typer.Exit(code=1)
+    _print_agent_summary(result, json_output)
 
 
 @app.command(name="rh-run")
@@ -273,6 +294,48 @@ def _print_principal_summary(result: PrincipalResult, json_output: bool) -> None
             str(volumes.year),
             f"{volumes.green_volume_m3:,.0f}",
             f"{volumes.burned_volume_m3:,.0f}",
+        )
+    console.print(year_table)
+
+    for diagnostic in result.diagnostics:
+        console.print(
+            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
+        )
+
+    console.print("Artifacts:")
+    console.print(f"  {result.data_path}")
+    console.print(f"  {result.csv_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_agent_summary(result: AgentResult, json_output: bool) -> None:
+    """Print the agent solve summary as JSON or a Rich report."""
+
+    if json_output:
+        payload = {"ok": True, "command": "agent-run", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(f"[bold green]Agent solve complete:[/bold green] {result.run_id}")
+    console.print(f"  Status: {result.status}")
+    console.print(f"  Cohorts: {result.cohorts:,}")
+    console.print(f"  Horizon: {result.horizon} years")
+    console.print(f"  LP size: {result.lp_rows:,} rows x {result.lp_columns:,} columns")
+    console.print(f"  Objective value (NPV): {result.objective_value:,.0f}")
+    console.print(f"  Active cohort-years: {result.active_cohort_years:,}")
+    console.print(f"  Solve time: {result.solve_seconds:.1f} s")
+
+    year_table = Table(title="Agent volumes per year")
+    year_table.add_column("Year")
+    year_table.add_column("Harvested (m3)", justify="right")
+    year_table.add_column("Salvaged (m3)", justify="right")
+    year_table.add_column("Burned (m3)", justify="right")
+    for volumes in result.per_year_volumes:
+        year_table.add_row(
+            str(volumes.year),
+            f"{volumes.harvest_volume_m3:,.0f}",
+            f"{volumes.salvage_volume_m3:,.0f}",
+            f"{volumes.burn_influx_m3:,.0f}",
         )
     console.print(year_table)
 
