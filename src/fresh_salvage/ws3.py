@@ -333,9 +333,19 @@ def build_smashed_no_lu_bridge(
 
     # Mirror femic's writer-side normalization so the conservation gate
     # reconciles exactly what the writer received against what it wrote.
-    staged_area_ha = float(
-        pd.to_numeric(areas["area_ha"], errors="coerce").fillna(0.0).sum()
-    )
+    # Area parsing is as strict as age parsing above: an unparseable area
+    # must halt the rebuild, never silently contribute zero hectares.
+    parsed_areas = pd.to_numeric(areas["area_ha"], errors="coerce")
+    invalid_area_mask = parsed_areas.isna()
+    if invalid_area_mask.any():
+        examples = areas.loc[invalid_area_mask, "area_ha"].astype(str).head(5).tolist()
+        raise WS3Error(
+            "invalid_area_values",
+            f"femic stage-1 areas table {source / STAGE1_AREAS_FILENAME} contains "
+            f"{int(invalid_area_mask.sum())} rows with unparseable area_ha values "
+            f"(e.g. {examples}); refusing to silently treat them as zero area",
+        )
+    staged_area_ha = float(parsed_areas.sum())
     result = writer(
         woodstock_dir=staging,
         output_dir=dest,

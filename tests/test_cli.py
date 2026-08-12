@@ -12,7 +12,7 @@ from fresh_salvage.cli import app
 
 runner = CliRunner()
 
-STUB_COMMANDS = ("solve-principal", "solve-agent", "rh-run", "export")
+STUB_COMMANDS = ("solve-agent", "rh-run", "export")
 
 
 def test_cli_help() -> None:
@@ -49,10 +49,18 @@ def test_cli_stub_command_fails_with_json_diagnostic(command: str) -> None:
 
 
 def test_cli_stub_command_fails_fast_without_json() -> None:
-    result = runner.invoke(app, ["solve-principal"])
+    result = runner.invoke(app, ["solve-agent"])
 
     assert result.exit_code == 1
     assert "not implemented yet" in result.stdout
+
+
+def test_cli_solve_principal_stub_is_retired() -> None:
+    result = runner.invoke(app, ["solve-principal"])
+
+    # Typer/click exit code 2 = no such command; the working command is
+    # principal-run.
+    assert result.exit_code == 2
 
 
 def test_cli_ws3_run_missing_config_fails_with_json_diagnostic(tmp_path: Path) -> None:

@@ -454,14 +454,20 @@ def _expected_burn_losses(
 
 
 def _read_table(path: Path, code: str) -> pd.DataFrame:
-    """Read a parquet or csv stands table, failing fast when absent."""
+    """Read a parquet or csv table, failing fast when absent or unsupported."""
 
     path = Path(path)
     if not path.is_file():
         raise PrincipalError(code, f"input table not found: {path}")
-    if path.suffix == ".parquet":
+    if path.suffix.lower() == ".parquet":
         return pd.read_parquet(path)
-    return pd.read_csv(path)
+    if path.suffix.lower() == ".csv":
+        return pd.read_csv(path)
+    raise PrincipalError(
+        "principal_table_unsupported_suffix",
+        f"input table {path} has unsupported suffix {path.suffix!r}; "
+        "expected .parquet or .csv",
+    )
 
 
 def _development_type_economics(frame: pd.DataFrame) -> dict[str, dict[str, float]]:
@@ -472,7 +478,12 @@ def _development_type_economics(frame: pd.DataFrame) -> dict[str, dict[str, floa
     ``burned_price`` is the volume-weighted average burned price ($/m3).
     """
 
-    required = {"development_type", "Total_Green_Vol", "Total_Burned_Vol"}
+    required = {
+        "development_type",
+        "Total_Green_Vol",
+        "Total_Burned_Vol",
+        *BURNED_GRADE_COLUMNS,
+    }
     missing = required.difference(frame.columns)
     if missing:
         raise PrincipalError(
@@ -582,14 +593,27 @@ def _parse_are_cohorts(
                 f"{are_path} line {line_number} has non-numeric curve/age/area: {line!r}",
             ) from exc
 
-        development_type = _development_type_from_stratum(stratum_code)
+        try:
+            development_type = _development_type_from_stratum(stratum_code)
+        except fire.UnknownBurnRateError as exc:
+            raise PrincipalError(
+                "principal_stratum_malformed",
+                f"{are_path} line {line_number} carries a malformed stratum code: {exc}",
+            ) from exc
         if development_type not in economics:
             raise PrincipalError(
                 "principal_stratum_unmapped",
                 f"stratum {stratum_code!r} maps to development type "
                 f"{development_type!r}, which has no stands-table economics",
             )
-        burn_rate = fire.annual_burn_rate_for_stratum(stratum_code)
+        try:
+            burn_rate = fire.annual_burn_rate_for_stratum(stratum_code)
+        except fire.UnknownBurnRateError as exc:
+            raise PrincipalError(
+                "principal_burn_rate_unknown",
+                f"stratum {stratum_code!r} on {are_path} line {line_number} has no "
+                f"MFRI fire-rate entry: {exc}",
+            ) from exc
         standing_volume_m3 = area_ha * _curve_volume_m3_per_ha(curves, curve_id, age)
         burn_share = economics[development_type]["burn_share"]
         burned_volume_m3 = standing_volume_m3 * burn_share

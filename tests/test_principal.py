@@ -5,10 +5,13 @@ TSA data is read. ``_solve`` wraps ``solve_principal`` with a high AAC and no
 burned cap unless the test says otherwise.
 """
 
+import hashlib
+
 import highspy
+import pandas as pd
 import pytest
 
-from fresh_salvage import principal
+from fresh_salvage import data, principal
 from fresh_salvage.principal import PrincipalCohort
 
 TOLERANCE = 1e-6
@@ -291,3 +294,87 @@ def test_stratum_maps_to_stands_development_type() -> None:
     assert principal._development_type_from_stratum("sbps_pli") == "SPF_SBPS"
     assert principal._development_type_from_stratum("idf_fd") == "SPF_IDF"
     assert principal._development_type_from_stratum("essf_bl") == "SPF_ESSF"
+
+
+def test_parse_offer_fraction_snaps_within_tolerance() -> None:
+    assert principal._parse_offer_fraction(1.0 + 1e-12, 0) == 1.0
+    assert principal._parse_offer_fraction(-1e-12, 0) == 0.0
+    assert principal._parse_offer_fraction(0.25, 3) == 0.25
+
+
+def test_parse_offer_fraction_fails_fast_beyond_tolerance() -> None:
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal._parse_offer_fraction(1.0 + 1e-6, 7)
+    assert excinfo.value.code == "principal_fraction_out_of_bounds"
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal._parse_offer_fraction(-1e-6, 2)
+    assert excinfo.value.code == "principal_fraction_out_of_bounds"
+
+
+def _write_toy_run_config(tmp_path):
+    """Write a tiny synthetic stands/ARE/yields triple and its config."""
+
+    from fresh_salvage.models import PrincipalRunConfig
+
+    stands_path = tmp_path / "stands.parquet"
+    pd.DataFrame(
+        [
+            {
+                "development_type": "SPF_SBPS",
+                "Total_Green_Vol": 1_000.0,
+                "Total_Burned_Vol": 200.0,
+                **{column: 0.0 for column in data.BURNED_GRADE_COLUMNS},
+            }
+        ]
+    ).to_parquet(stands_path, index=False)
+
+    are_path = tmp_path / "toy.are"
+    are_path.write_text(
+        "toy ARE section\n*A 29 1 7 sbps_pli 101 45 120.5\n",
+        encoding="utf-8",
+    )
+
+    yields_path = tmp_path / "yields.csv"
+    pd.DataFrame(
+        [
+            {"curve_id": 101, "age": 0, "volume": 0.0},
+            {"curve_id": 101, "age": 50, "volume": 250.0},
+            {"curve_id": 101, "age": 100, "volume": 400.0},
+        ]
+    ).to_csv(yields_path, index=False)
+
+    return PrincipalRunConfig(
+        run_id="toy-e2e",
+        stands_path=stands_path,
+        are_path=are_path,
+        yields_path=yields_path,
+        horizon=3,
+        output_root=tmp_path / "out",
+    )
+
+
+def test_run_principal_end_to_end_writes_artifacts_and_manifest(tmp_path) -> None:
+    from fresh_salvage.models import PrincipalManifest
+
+    config = _write_toy_run_config(tmp_path)
+
+    result = principal.run_principal(config)
+
+    assert result.status == "optimal"
+    assert result.cohorts == 1
+    assert result.data_path.is_file()
+    assert result.csv_path.is_file()
+    assert result.manifest_path.is_file()
+
+    offers = pd.read_parquet(result.data_path)
+    assert len(offers) == 3  # one cohort x three years, zeros included
+
+    manifest = PrincipalManifest.read_json(result.manifest_path)
+    expected_checksums = {
+        "stands": hashlib.sha256(config.stands_path.read_bytes()).hexdigest(),
+        "are": hashlib.sha256(config.are_path.read_bytes()).hexdigest(),
+        "yields": hashlib.sha256(config.yields_path.read_bytes()).hexdigest(),
+    }
+    assert manifest.source_sha256 == expected_checksums
+    assert manifest.status == "optimal"
+    assert manifest.run_id == "toy-e2e"

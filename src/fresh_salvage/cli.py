@@ -145,17 +145,6 @@ def principal_run(
     _print_principal_summary(result, json_output)
 
 
-@app.command(name="solve-principal")
-def solve_principal(
-    json_output: Annotated[
-        bool,
-        typer.Option("--json", help="Emit deterministic JSON output."),
-    ] = False,
-) -> None:
-    """Solve the principal-side linear HiGHS LP."""
-    _stub_exit("solve-principal", json_output)
-
-
 @app.command(name="solve-agent")
 def solve_agent(
     json_output: Annotated[
