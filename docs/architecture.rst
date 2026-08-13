@@ -19,7 +19,7 @@ Data Flow
                 v                                          |
    (1) data: ingestion, typed stand records                v
         severity ladder, coverage scaling,        (2) ws3: no-LU bridge rebuild
-        economic surface at the boundary                (44,998 -> 1,608 cohorts),
+        economic surface at the boundary                (1,608 aggregated cohorts),
                 |                                   full-TSA schedule solve under
                 |                                   the 2,937,509 m3/yr AAC ceiling
                 +----------------+-------------------------+

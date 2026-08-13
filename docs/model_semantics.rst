@@ -25,7 +25,11 @@ instance stratifies the TSA into 54 analysis units — 18 strata
 (``{bec_zone}_{leading_species}`` codes such as ``sbps_pli``) crossed with 3
 site-index levels — each carrying VDYP- or TIPSY-derived yield curves keyed
 by ``curve_id``. Crossed with the 2 IFMs (managed/unmanaged) and the age
-dimension, the femic stage-1 areas table holds 44,998 raw ARE rows.
+dimension, the femic stage-1 areas table holds 44,998 rows: it still
+carries the optional landscape-unit dimension and unsmoothed single-year
+ages (~108 AU×curve strata × ~35 raw ages × ~12 LU codes). Dropping the
+landscape unit and smashing ages to 10-year class midpoints aggregates
+these to the 1,608 cohort lines described below.
 
 **Cohorts** (the LP decision units). The pipeline rebuilds the bridge
 Landscape-Unit-free: ``landscape_unit_id`` is dropped at the source, every

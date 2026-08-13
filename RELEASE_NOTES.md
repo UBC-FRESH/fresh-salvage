@@ -16,8 +16,8 @@ the parallel scenario-ensemble driver.
   unmatched-label guards, and coverage-scaled salvageable volume
   (FS-VAL-01/02 resolved).
 - Full-TSA WS3 wood-supply layer: Landscape-Unit-free bridge rebuilt from
-  the femic stage-1 Woodstock CSVs (44,998 raw ARE rows aggregated to
-  1,608 area-conserving cohort lines), `cc` clear-cut action operable at
+  the femic stage-1 Woodstock CSVs (aggregated to 1,608 midpoint-smashed,
+  area-conserving cohort lines), `cc` clear-cut action operable at
   ages [60, 300], and the 2,937,509 m3/yr AAC ceiling.
 - Principal LP: continuous offer fractions per cohort-year, maximizing
   stumpage net of subsidy minus MFRI-weighted expected burned-wood loss,

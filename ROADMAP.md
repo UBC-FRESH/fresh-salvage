@@ -92,7 +92,8 @@ bridge, compiling schedule records for every development type and period.
 
 Evidence: `11c1f1d` (WS3 pipeline), `08d5014` (no-LU bridge rebuild via the
 femic writer: LU theme dropped at source, 10-year midpoint age smashing,
-femic stage-2 writer aggregation; ARE section 44,998 -> 1,608 lines),
+femic stage-2 writer aggregation; ARE section aggregated to 1,608
+midpoint-smashed lines),
 `01cf464` (area-conservation fail-fast gate and strict age parsing).
 External dependency: femic writer fix `d057aea`.
 

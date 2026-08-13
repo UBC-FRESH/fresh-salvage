@@ -41,8 +41,8 @@ The Five-Layer Pipeline
    ``min(1, SHAPE_Area_1 / FEATURE_AREA_SQM)`` — an upper-bound proxy.
 2. **WS3 wood supply** (``fresh_salvage.ws3``) — a Landscape-Unit-free WS3
    bridge is rebuilt from the femic stage-1 Woodstock CSVs (ages smashed to
-   10-year class midpoints; 44,998 raw ARE rows aggregate to 1,608
-   area-conserving cohorts) and solved over the full TSA under the
+   10-year class midpoints; aggregated to 1,608 area-conserving cohort
+   lines) and solved over the full TSA under the
    2,937,509 m3/yr AAC ceiling with even-flow constraints (HiGHS).
 3. **Principal LP** (``fresh_salvage.principal``) — continuous offer
    fractions per cohort-year, maximizing stumpage cashflow net of subsidy

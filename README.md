@@ -44,8 +44,8 @@ entry point and a manifest-emitting run record.
 2. **WS3 wood supply** (`fresh_salvage.ws3`). A Landscape-Unit-free WS3
    bridge is rebuilt from the femic stage-1 Woodstock CSVs: fragment ages
    are smashed to 10-year class midpoints and femic's own writer aggregates
-   area over unique cohort keys (44,998 raw ARE rows become 1,608 aggregated
-   cohorts, gated by area conservation). WS3 solves the wood-supply schedule
+   area over unique cohort keys (aggregated to 1,608 midpoint-smashed
+   cohort lines, gated by area conservation). WS3 solves the wood-supply schedule
    over the full TSA with a `cc` clear-cut action operable at ages [60, 300]
    and the 2,937,509 m3/yr AAC ceiling.
 3. **Principal LP** (`fresh_salvage.principal`). The principal chooses
