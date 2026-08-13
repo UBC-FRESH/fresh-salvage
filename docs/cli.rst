@@ -16,7 +16,7 @@ Conventions
 config's ``output_root``: ``data/`` for tabular outputs (parquet plus csv
 twins, or JSONL record streams), ``manifests/`` for JSON run manifests
 (config snapshot, input checksums, timing, diagnostics), and ``logs/`` for
-execution logs. File names are slugged from the ``run_id`` (or
+execution logs. File names are derived from the ``run_id`` (or
 ``ensemble_id``), so re-running a config overwrites its own artifacts.
 
 **Exit codes.** Success exits 0. Any failure — config validation, boundary
@@ -61,7 +61,7 @@ Config (``ScenarioRunConfig``):
      - Meaning
    * - ``run_id``
      - ``tsa29-full``
-     - Run identifier; slugs the artifact names.
+     - Run identifier; used to name the artifacts.
    * - ``inputs.wl_vfsl_path``
      - (required)
      - Path to the external WL_VFSL polygon layer CSV. Never vendored.
@@ -101,8 +101,8 @@ Notable failure codes: ``ingest_source_missing``,
 ws3-run
 -------
 
-Rebuild the Landscape-Unit-free WS3 bridge, compile the full-TSA model, and
-solve the wood-supply schedule.
+Rebuild the WS3 input files, compile the full-TSA model, and solve the
+wood-supply schedule.
 
 .. code-block:: bash
 
@@ -125,9 +125,10 @@ Config (``WS3RunConfig``):
      - Run identifier.
    * - ``bridge_path``
      - (required)
-     - Path to the WS3 bridge. A canonical 6-theme bridge triggers a no-LU
-       rebuild from the sibling femic stage-1 Woodstock CSVs; an
-       already-derived bridge is used as-is.
+     - Path to the WS3 bridge. Point it at the canonical femic bridge and
+       the command first rebuilds the input files from the sibling femic
+       stage-1 Woodstock CSVs (see :doc:`model_semantics` for the
+       adjustment); an already-rebuilt bridge is used as-is.
    * - ``base_year``
      - (required)
      - WS3 base year (2025 for TSA29).
@@ -140,7 +141,7 @@ Config (``WS3RunConfig``):
      - Years per WS3 period.
    * - ``max_age``
      - 999
-     - WS3 model age ceiling; bridge ages outside the domain fail fast.
+     - WS3 model age ceiling; bridge ages outside the domain stop the run.
    * - ``workers``
      - 64
      - WS3 tree-generation/build worker threads. Hold fixed for cross-run
@@ -178,7 +179,7 @@ Artifacts: ``data/<run>-schedule.parquet`` / ``.csv`` (columns ``period``,
 ``year``, ``dtype_key``, ``stratum``, ``age_class``, ``area_ha``,
 ``harvest_action``, ``volume_m3``, ``etype``),
 ``manifests/<run>-ws3-manifest.json`` (bridge checksums, LP row/column
-counts, solve seconds, objective). The derived no-LU bridge is materialized
+counts, solve seconds, objective). The derived bridge is materialized
 under ``<output_root>/derived/ws3_bridge_no_lu`` with the staged CSVs beside
 it (``<output_root>/derived/woodstock_no_lu_smashed``).
 
@@ -278,7 +279,7 @@ Config (``AgentRunConfig``): the same boundary inputs as the principal
      - null
      - Optional principal offer table (parquet or csv with ``cohort_id``,
        ``year``, ``offer_fraction`` columns). Unknown cohorts, duplicate
-       rows, and out-of-range fractions fail fast.
+       rows, and out-of-range fractions are rejected with an error.
 
 Artifacts: ``data/<run>-decisions.parquet`` / ``.csv`` (per-cohort-year
 ``harvest_fraction``/``salvage_fraction`` plus m3 volumes, zeros emitted
@@ -306,8 +307,8 @@ Config (``RHRunConfig``):
      - Run identifier.
    * - ``stands_path`` / ``yields_path`` / ``bridge_path``
      - (required)
-     - Stands table, femic stage-1 yields, and WS3 bridge (rebuilt no-LU
-       once per run when canonical).
+     - Stands table, femic stage-1 yields, and WS3 bridge (rebuilt from
+       the staging export once per run when canonical).
    * - ``base_year``
      - 2025
      - Calendar year of step 1.
@@ -407,7 +408,7 @@ Config (``EnsembleConfig``):
      - Meaning
    * - ``ensemble_id``
      - ``tsa29-ensemble``
-     - Ensemble identifier; slugs the artifact names.
+     - Ensemble identifier; used to name the artifacts.
    * - ``base``
      - ``{}``
      - Shared ``RHRunConfig`` field values (input paths, horizon, steps,
@@ -452,7 +453,7 @@ Artifacts: ``data/<ensemble>-scenarios.jsonl`` (one record per scenario in
 deterministic grid order — name, overrides, status, error code, wall
 seconds, per-scenario artifact paths), ``manifests/<ensemble>-ensemble-manifest.json``
 (grid config digest, input and bridge checksums, outcomes), the once-built
-shared no-LU bridge under ``<output_root>/derived/ws3_bridge_no_lu``, and
+shared bridge under ``<output_root>/derived/ws3_bridge_no_lu``, and
 the full per-scenario rolling-horizon artifact set under
 ``<output_root>/<scenario>/``. See :doc:`ensembles` for the parallelism
 model, performance budgets, and a worked sweep.
@@ -460,6 +461,6 @@ model, performance budgets, and a worked sweep.
 export
 ------
 
-Reserved for the tabular export phase. The command currently fails fast
-with a not-implemented diagnostic (exit code 1), including under ``--json``;
-do not build workflows on it until the roadmap records the export phase.
+Reserved for the tabular export phase. The command currently exits 1 with
+a not-implemented diagnostic, including under ``--json``; do not build
+workflows on it until the roadmap records the export phase.

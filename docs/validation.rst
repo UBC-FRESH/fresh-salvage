@@ -1,13 +1,12 @@
 Validation
 ==========
 
-This page summarizes the Phase 6 validation record for doc readers. The
-authoritative, full-detail source is
-``planning/phase6-validation-report.md`` (status: both validation defects
-resolved, results re-generated, 2026-08-12); the economic rationale is
-``planning/economics-calibration.md``. Numbers below are quoted from those
-records; ``outputs/`` paths referenced there are local, uncommitted run
-artifacts.
+This page summarizes the Phase 6 validation record. The authoritative,
+full-detail source is ``planning/phase6-validation-report.md`` (status:
+both validation defects resolved, results re-generated, 2026-08-12); the
+economic rationale is ``planning/economics-calibration.md``. Numbers below
+are quoted from those records; ``outputs/`` paths referenced there are
+local, uncommitted run artifacts.
 
 What Was Validated
 ------------------
@@ -89,8 +88,8 @@ Post-adjustment reference numbers (calibrated defaults; subsidy 3.0 $/m3):
        stays negative
    * - Area burned
      - ~201 kha/decade (~2.01 Mha over 100 years)
-     - the MFRI fire influx still burns; it is simply uneconomic to recover
-       at 3 $/m3
+     - the MFRI fire influx still burns; recovering it is not economic at
+       3 $/m3
 
 Runtime Table
 -------------
@@ -160,7 +159,7 @@ the calibration. The ramp is narrow because every ARE cohort in the WS3
 bridge maps to one of the four SPF development types; the wider
 species-level heterogeneity (Cedar ~15.5, Hem-Bal ~19.6, Other ~27-30 $/m3
 breakevens) does not bind because no bridge stratum maps to those DTs. The
-FESBC 14-15 $/m3 benchmark sits just below the turn-on: benchmark-level
+FESBC 14-15 $/m3 benchmark sits slightly below the turn-on: benchmark-level
 support closes ~75-80% of the margin gap but does not flip the program.
 
 Green harvest is subsidy-invariant (36,279,196.26 m3 at burn x1.0, max
@@ -218,11 +217,11 @@ cost stack 56 + 38 + 0.25 = 94.25 $/m3):
 **History, for honesty.** The first calibration round produced no flip
 inside 0-25 $/m3 (the grey-stage grade mix was double-counted with the
 0.85/yr decay, driving breakevens to ~48 $/m3); the prompt-salvage
-adjustment of 2026-08-12 retargeted the grade mix to the year 1-3 regime and
-moved the flip to the high teens. The pre-calibration placeholder economics
-showed a flat, subsidy-invariant response (~+93 $/m3 unsubsidized margin).
-Both superseded states are documented in the validation report — cite the
-current calibration only.
+adjustment of 2026-08-12 retargeted the grade mix to the year 1-3 regime
+and moved the flip to the high teens. The pre-calibration placeholder
+economics showed a flat, subsidy-invariant response (~+93 $/m3
+unsubsidized margin). Both superseded states are documented in the
+validation report — cite the current calibration only.
 
 Predecessor-Parity Caveats
 --------------------------

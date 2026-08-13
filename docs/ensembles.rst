@@ -1,11 +1,12 @@
 Scenario Ensembles
 ==================
 
-Thesis-scale sensitivity analysis runs one full rolling-horizon coupled run
-per scenario, where a scenario is one point of a cartesian grid over named
-``RHRunConfig`` fields. This page covers why the driver exists, the grid
-syntax, the parallelism and failure models, performance budgeting, and a
-worked subsidy flip-point sweep.
+A sensitivity analysis over this model means running the full 100-year
+rolling-horizon loop once per scenario, where a scenario is one combination
+of values from a grid over named ``RHRunConfig`` fields. The ensemble driver
+exists to run those scenarios in parallel. This page covers why the driver
+exists, the grid syntax, the parallelism and failure models, performance
+budgeting, and a worked subsidy flip-point sweep.
 
 Why Ensembles
 -------------
@@ -14,14 +15,14 @@ The coupled model has three families of assumptions a policy analysis must
 sweep rather than fix:
 
 **Principal policy.** ``subsidy_rate_per_m3`` is the instrument itself —
-the analysis question is the response surface of salvage volume and program
-cost to the subsidy level.
+the analysis question is how salvage volume and program cost respond to
+the subsidy level.
 
 **Agent profit function.** The flat economic fields (``green_prices``,
 ``burned_price_discount``, ``green_harvest_cost``, ``burned_harvest_cost``,
 ``green_transport_cost_per_m3``, ``burned_transport_cost_per_m3``,
 ``green_stumpage_rate``, ``burned_stumpage_rate``) plus ``discount_rate``
-parameterize the agent's margins; sweeping them stress-tests the calibrated
+set the agent's margins; sweeping them stress-tests the calibrated
 semi-synthetic surface (see :doc:`model_semantics`).
 
 **Future fire pattern.** ``burn_rate_multiplier`` scales every MFRI-derived
@@ -53,7 +54,8 @@ Grid Syntax
    max_workers: 4
    output_root: outputs/ensemble_tsa29_smoke
 
-Rules enforced at expansion time (fail fast, before any work starts):
+The grid is the cartesian product: one scenario per combination of axis
+values. Rules enforced at expansion time, before any work starts:
 
 - Every ``base`` and ``axes`` key must be an ``RHRunConfig`` field name —
   there is no positional ambiguity and no silent ignore
@@ -69,7 +71,7 @@ Rules enforced at expansion time (fail fast, before any work starts):
   scenario must form a valid ``RHRunConfig`` (``ensemble_scenario_invalid``).
 
 Scenario names are deterministic: ``axis-value`` fragments joined by ``__``
-in sorted axis order, slugged (for example
+in sorted axis order, normalized for file names (for example
 ``burn_rate_multiplier-1.0__subsidy_rate_per_m3-0.0``). An empty ``axes``
 mapping yields the single ``baseline`` scenario. Records and artifacts are
 written in grid order regardless of completion order, so identical inputs
@@ -84,10 +86,10 @@ Parallelism Model
   Spawn workers start from a clean interpreter (no fork-with-threads
   hazards) and inherit ``PYTHONPATH``, which the ws3 dependency requires.
 - The one shared input is the WS3 bridge: when the configured bridge is the
-  canonical Landscape-Unit bridge, the parent process rebuilds the derived
-  no-LU bridge **once** under the ensemble output root before the pool
-  starts, and every scenario then reads it. The bridge is strictly read-only
-  during the parallel phase; there is no write contention.
+  canonical femic bridge, the parent process rebuilds the derived bridge
+  **once** under the ensemble output root before the pool starts, and every
+  scenario then reads it. The bridge is strictly read-only during the
+  parallel phase; there is no write contention.
 - ``max_workers: 1`` runs scenarios sequentially **in-process** — the debug
   and test profile, with identical failure-capture semantics.
 
@@ -206,9 +208,9 @@ Three structural facts to check in any sweep you run:
   salvage; a nonzero value there indicates a wiring defect, not a result.
 - **Green harvest is subsidy-invariant** (36,279,196.26 m3 at burn x1.0,
   max pairwise spread at solver precision): salvage never displaces green
-  harvest, it monetizes volume that would otherwise decay.
+  harvest, it recovers volume that would otherwise decay.
 - The flip location is the volume-weighted SPF breakeven predicted by the
-  calibration (~19.1-19.4 $/m3); the FESBC 14-15 $/m3 benchmark sits just
-  below the turn-on, which is exactly the gap a minimum-subsidy analysis
-  targets. If a future recalibration moves the DT margins, expect the flip
-  to move with them.
+  calibration (~19.1-19.4 $/m3); the FESBC 14-15 $/m3 benchmark sits
+  slightly below the turn-on, which is exactly the gap a minimum-subsidy
+  analysis targets. If a future recalibration moves the DT margins, expect
+  the flip to move with them.

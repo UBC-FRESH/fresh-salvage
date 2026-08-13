@@ -1,57 +1,99 @@
 Model Semantics
 ===============
 
-This page records the equations and state semantics the pipeline implements.
-The same fire equations appear in the agent LP rows and in the standalone
-fire simulation (``fresh_salvage.fire.simulate_cohort_years``), so the
-optimization layers and the state replay share one source of truth. Read
-this page before trusting any number the pipeline emits.
+This page records what the model computes: the equations, the state
+variables, and the assumptions behind them. The same fire equations appear
+in the agent LP rows and in the standalone fire simulation
+(``fresh_salvage.fire.simulate_cohort_years``), so the optimization layers
+and the state replay share one source of truth. Read this page before
+trusting any number the pipeline emits.
 
 Decision Units: Stands, Development Types, Cohorts
 --------------------------------------------------
 
 Three granularities appear in the pipeline; do not mix them up.
 
-**Stands** (ingestion only). One row per VRI polygon of the WL_VFSL layer —
-246,957 retained stands over the full TSA29 (all 12 BEC zones; the
-predecessor's 11-landscape-unit subset filter is removed). Each stand is
-assigned a **development type** (DT) key ``{leading_species_group}_{BEC}``
-(for example ``SPF_SBPS``, ``Cedar_IDF``) from its leading species code and
-BEC zone, and carries derived green and burned volumes split over 13
+**Stands** (ingestion only). One row per polygon of the WL_VFSL layer, the
+BC Vegetation Resources Inventory (VRI) extract for TSA29 joined with
+burn-severity attributes: 246,957 retained stands over the full TSA (all
+12 Biogeoclimatic Ecosystem Classification (BEC) zones; the predecessor's
+subset filter is removed). Each stand is assigned a
+**development type** (DT) key ``{leading_species_group}_{BEC}`` (for
+example ``SPF_SBPS``, ``Cedar_IDF``) from its leading species code and BEC
+zone, and carries derived green and burned volumes split over 13
 species/grade buckets.
 
 **Strata and analysis units** (the WS3 bridge). The validated femic TSA29
 instance stratifies the TSA into 54 analysis units — 18 strata
-(``{bec_zone}_{leading_species}`` codes such as ``sbps_pli``) crossed with 3
-site-index levels — each carrying VDYP- or TIPSY-derived yield curves keyed
-by ``curve_id``. Crossed with the 2 IFMs (managed/unmanaged) and the age
-dimension, the femic stage-1 areas table holds 44,998 rows: it still
-carries the optional landscape-unit dimension and unsmoothed single-year
-ages (~108 AU×curve strata × ~35 raw ages × ~12 LU codes). Dropping the
-landscape unit and smashing ages to 10-year class midpoints aggregates
-these to the 1,608 cohort lines described below.
+(``{bec_zone}_{leading_species}`` codes such as ``sbps_pli``) crossed with
+3 site-index levels — each carrying yield curves from BC's VDYP and TIPSY
+models, keyed by ``curve_id``. Crossed with the 2 IFMs (the
+managed/unmanaged lanes) and the raw single-year age dimension, the femic
+stage-1 areas table holds 44,998 rows at its native stratification. The
+next section describes how that table becomes the WS3 input files.
 
-**Cohorts** (the LP decision units). The pipeline rebuilds the bridge
-Landscape-Unit-free: ``landscape_unit_id`` is dropped at the source, every
-fragment age is smashed to its 10-year class midpoint
-(``age // 10 * 10 + 5``, i.e. the lattice 5/15/25/...) *before* grouping,
-and femic's own stage-2 writer aggregates area over the unique key
-``(tsa, ifm, au_id, stratum_code, curve_id, age)``. The result is **1,608
-aggregated, area-conserving cohorts** (the written ARE section is reconciled
-against the staged area total to a relative tolerance of 1e-6 — the femic
-writer silently drops rows whose ``(tsa, ifm, au_id)`` has no yield curve).
-
-A cohort's standing volume is its area times the curve yield (m3/ha) at the
-cohort age, with linear interpolation between curve points and constant
-endpoint extension beyond the tabulated age range. The principal and agent
-LPs run at 1-year timesteps over these cohorts; the rolling-horizon engine
+**Cohorts** (the LP decision units). After the adjustment described below,
+the areas table collapses to **1,608 aggregated cohorts**
+keyed by ``(tsa, ifm, au_id, stratum_code, curve_id, age)``. A cohort's
+standing volume is its area times the curve yield (m3/ha) at the cohort
+age, with linear interpolation between curve points and constant endpoint
+extension beyond the tabulated age range. The principal and agent LPs run
+at 1-year timesteps over these cohorts; the rolling-horizon engine
 implements 10 years per step and re-solves WS3 between steps.
+
+How the WS3 input files are built
+---------------------------------
+
+WS3 reads its model definition from Woodstock text files
+(``.lan``/``.are``/``.act``/``.trn``/``.yld``). fresh-salvage derives those
+files from a staging table that femic exports: ``woodstock_areas.csv``,
+which stratifies the TSA's area over analysis unit, managed/unmanaged
+lane, yield curve, and raw inventory age. The current export holds 44,998
+stratified rows, totalling 2,977,503.74 ha.
+
+That staging table is valid and current. It was never meant to be consumed
+line-for-line: an early ``.are`` file that did exactly that — kept every
+staging key column and the raw single-year ages against a five-theme
+model — was the broken artifact, not the table behind it.
+
+When fresh-salvage builds the WS3 model, it adjusts the staging table,
+hands it to femic's own stage-2 writer
+(``femic.ws3_bridge.build_ws3_sections_from_femic_woodstock``), and then
+verifies what the writer emitted:
+
+1. **Drop the landscape-unit column.** The column leaves the staging key
+   before anything is aggregated.
+2. **Snap ages to class midpoints.** Each raw inventory age moves to the
+   midpoint of its 10-year class: 11 and 17 both become 15. The code and
+   config call this ``age_smashing``; the rule is
+   ``age // 10 * 10 + 5``, so the age lattice runs 5/15/25/....
+3. **femic's writer re-groups, sums, and writes.** The writer groups rows
+   on the remaining key ``(tsa, ifm, au_id, stratum_code, curve_id,
+   age)``, sums their areas — the 44,998 staged rows collapse to 1,608 —
+   and writes the Woodstock files.
+4. **fresh-salvage verifies the written files.** The written bridge must
+   carry the expected theme count, every written age must lie on the
+   midpoint lattice, and the written ARE section must conserve the staged
+   area total to a relative tolerance of 1e-6 — otherwise the build
+   refuses to proceed (``area_conservation_failed``).
+
+fresh-salvage never writes Woodstock text itself. One wart to know about:
+the femic writer silently drops rows whose ``(tsa, ifm, au_id)`` key has
+no yield curve, so the written-area check in step 4 is what stands between
+a quiet data defect and a wrong model.
+
+Where the adjustment lives. The adjustment runs at consumption time,
+inside fresh-salvage, rather than at the source in femic. The cleaner
+arrangement — regenerating the staging table in femic at the grain this
+model consumes — remains an option. The current split exists because the
+adjustment was defined after femic's staging export already existed;
+adjusting at consumption time kept the existing valid export unchanged.
 
 Fire Dynamics
 -------------
 
-The annual burn probability of a development type is ``R = 1 / MFRI`` where
-MFRI is the mean fire return interval (years) of its BEC zone:
+The annual burn probability of a development type is ``R = 1 / MFRI``
+where MFRI is the mean fire return interval (years) of its BEC zone:
 
 .. list-table::
    :header-rows: 1
@@ -79,9 +121,9 @@ MFRI is the mean fire return interval (years) of its BEC zone:
      - 0.0040
 
 An optional ``burn_rate_multiplier`` scales every rate (1.0 is the published
-table; 0.0 is a fire-free counterfactual); a scaled rate above 1.0 fails
-fast. An unmapped BEC zone is fatal (``UnknownBurnRateError``) — the
-pipeline never silently borrows a neighbouring zone's fire regime.
+table; 0.0 is a fire-free counterfactual); a scaled rate above 1.0 is
+rejected. An unmapped BEC zone stops the run (``UnknownBurnRateError``) —
+the pipeline never silently borrows a neighbouring zone's fire regime.
 
 Within one annual timestep the ordering is **harvest -> fire -> salvage ->
 decay**. Per cohort ``c`` and year ``t``:
@@ -152,8 +194,10 @@ The Principal LP
 ----------------
 
 The principal chooses continuous offer fractions ``offer[c, y]`` in
-``[0, 1]`` per cohort ``c`` and year ``y`` (1-year timesteps), maximizing
-stumpage cashflow net of the subsidy minus the expected loss of burned wood:
+``[0, 1]`` per cohort ``c`` and year ``y`` (1-year timesteps). It maximizes
+stumpage cashflow — stumpage is the per-m3 fee the licensee pays the Crown
+for standing timber — net of the subsidy, minus the expected loss of
+burned wood:
 
 .. code-block:: text
 
@@ -193,7 +237,8 @@ where, per cohort (all volumes m3, parsed at the boundary):
    burned value. (The prototype charged the full decayed value every year,
    implicitly ``R = 1``; here it is an expected loss.)
 
-The AAC ceiling (default **2,937,509 m3/yr**) bounds annual *offered green*
+The AAC ceiling (default **2,937,509 m3/yr**; AAC is the Annual Allowable
+Cut, the regulator's annual harvest ceiling) bounds annual *offered green*
 volume and binds in the calibrated base case. Because one fraction variable
 scales both volumes, an offer's green:burned split always equals the
 cohort's standing fractions, and offer-once is exactly volume conservation.
@@ -204,10 +249,10 @@ The Agent LP
 ------------
 
 The agent chooses continuous harvest and salvage fractions bounded by the
-principal's offers, maximizing discounted NPV over the same cohorts and
-1-year timesteps. Variables per cohort-year: ``H[c,t]``, ``S[c,t]``,
-``V[c,t]``, ``B[c,t]`` — the balance rows are exactly the fire dynamics
-above:
+principal's offers, maximizing discounted net present value (NPV) over the
+same cohorts and 1-year timesteps. Variables per cohort-year: ``H[c,t]``,
+``S[c,t]``, ``V[c,t]``, ``B[c,t]`` — the balance rows are exactly the fire
+dynamics above:
 
 .. code-block:: text
 
@@ -229,11 +274,11 @@ above:
 
 Prices are the development type's volume-weighted average grade prices
 (weighted by the configured ``green_prices``), and burned prices carry the
-burned price discount (0.65) through the prompt-salvage grade transition.
-The subsidy accrues per m3 of burned volume **actually salvaged**, not per
-m3 offered. Offers are an input: a uniform ``default_offer_fraction``
-(1.0 = fully offered), or a principal offer table
-(``cohort_id``/``year``/``offer_fraction`` columns, parquet or csv).
+burned price discount (0.65) through the prompt-salvage grade transition
+below. The subsidy accrues per m3 of burned volume **actually salvaged**,
+not per m3 offered. Offers are an input: a uniform
+``default_offer_fraction`` (1.0 = fully offered), or a principal offer
+table (``cohort_id``/``year``/``offer_fraction`` columns, parquet or csv).
 
 The Rolling-Horizon Loop
 ------------------------
@@ -245,7 +290,7 @@ cover exactly the implemented window at 1-year timesteps:
 
 .. code-block:: text
 
-   state  <- cohort table of the derived no-LU bridge ARE section
+   state  <- cohort table of the derived bridge ARE section
              (1,608 cohorts at the full-TSA scale)
    model  <- one WS3 ForestModel loaded once (bridge and static inputs
              cached; only the inventory changes between steps)
@@ -274,10 +319,11 @@ fractions (they sum to one by construction; area is conserved to 1e-6 and
 verified per step):
 
 - **surviving live area** stays in the cohort at ``age + period_length``,
-  clamped to the curve's age cap (the absorbing oldest class on the midpoint
-  lattice; volume-neutral up to curve flatness beyond the tabulated range);
-- **harvested area** (agent ``sum_t H[c,t]``) regenerates at the smashing
-  midpoint age (5 with the default 10/5 smashing);
+  clamped to the curve's age cap (the absorbing oldest class on the
+  midpoint lattice; volume-neutral up to curve flatness beyond the
+  tabulated range);
+- **harvested area** (agent ``sum_t H[c,t]``) regenerates at the class
+  midpoint age (5 with the default 10/5 rule);
 - **salvaged area** (``sum_t S[c,t]``) regenerates at the midpoint age;
 - **burned-but-unsalvaged area** (``1 - live_end - H - S``) regenerates at
   the midpoint age at the step boundary.
@@ -325,7 +371,7 @@ volume that becomes salvageable. It is a scenario-visible parameter
        ``ingest_unknown_severity`` warning (12 raw / 10 retained stands on
        the real layer)
 
-Any other unmatched non-null rating is **fatal**
+Any other unmatched non-null rating **halts ingestion**
 (``data_severity_unmatched``, listing the offending labels and counts) — the
 predecessor's silent ``fillna(0.0)`` is not reproduced (FS-VAL-01). Ladder
 fractions must lie in [0, 1], alias targets must be ladder labels, and alias
@@ -360,10 +406,10 @@ and earlier burns seed no initial salvageable volume.
 Economics
 ---------
 
-The economic surface is config-visible at every layer (an ``economics``
-section on the ingestion/principal/agent configs; flat fields on the
+Every economic parameter can be set in the config: an ``economics``
+section on the ingestion/principal/agent configs, and flat fields on the
 rolling-horizon config so the ensemble driver can vary any of them as a
-named axis) and defaults to the calibrated constants:
+named axis. The defaults are the calibrated constants:
 
 .. list-table::
    :header-rows: 1
@@ -455,13 +501,15 @@ FESBC benchmark support of 14-15 $/m3 closes roughly 75-80% of the margin
 gap but does not flip the program. The full per-DT table and the sweep
 evidence are in :doc:`validation`.
 
-Treat these economics as **semi-synthetic calibrated parameters**: each
-carries a documented rationale and a provenance label (market anchor,
-derived, or assumption) in ``planning/economics-calibration.md``, which is
-the authoritative reference. Two predecessor defects are deliberately not
-reproduced: burned peeler volumes are written under the schema's
-``B_*_Peelers_Vol`` names (so burned volume is conserved), and Other-species
-salvageable volume is routed into ``B_Other_Vol`` instead of being dropped.
+Treat these economics as **semi-synthetic calibrated parameters**: they are
+built from market anchors plus documented assumptions, not measured on a
+specific tenure. Each parameter carries a rationale and a provenance label
+(market anchor, derived, or assumption) in
+``planning/economics-calibration.md``, which is the authoritative reference.
+Two predecessor defects are deliberately not reproduced: burned peeler
+volumes are written under the schema's ``B_*_Peelers_Vol`` names (so burned
+volume is conserved), and Other-species salvageable volume is routed into
+``B_Other_Vol`` instead of being dropped.
 
 Known Limitations
 -----------------

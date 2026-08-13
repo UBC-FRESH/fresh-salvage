@@ -18,7 +18,7 @@ Data Flow
                 |                                 validated WS3 bridge)
                 v                                          |
    (1) data: ingestion, typed stand records                v
-        severity ladder, coverage scaling,        (2) ws3: no-LU bridge rebuild
+        severity ladder, coverage scaling,        (2) ws3: bridge rebuild
         economic surface at the boundary                (1,608 aggregated cohorts),
                 |                                   full-TSA schedule solve under
                 |                                   the 2,937,509 m3/yr AAC ceiling
@@ -62,11 +62,12 @@ Module Map
    other layer defaults to.
 
 ``ws3``
-   Full-TSA WS3 bridge rebuild (LU-theme drop at the source, midpoint age
-   smashing, femic writer aggregation, area-conservation gate) and schedule
-   solve (``cc`` action at operable ages [60, 300], AAC ceiling via
-   ``cgen_data``, even flow, HiGHS). ws3 and femic are imported lazily so
-   the pure helpers stay unit-testable without them.
+   Full-TSA WS3 input rebuild (raw ages snap to class midpoints, femic's
+   writer re-groups, sums, and writes the Woodstock files, and area
+   conservation is checked to 1e-6 — see :doc:`model_semantics`) and
+   schedule solve (``cc`` action at operable ages [60, 300], AAC ceiling
+   via ``cgen_data``, even flow, HiGHS). ws3 and femic are imported lazily
+   so the pure helpers stay unit-testable without them.
 
 ``principal``
    Principal-side continuous HiGHS LP for salvage-subsidy offers (offer
@@ -79,8 +80,8 @@ Module Map
 
 ``fire``
    The MFRI burn-rate table and the pure annual fire-dynamics primitives
-   (``simulate_cohort_years`` drives full-horizon replays and fails fast on
-   infeasible schedules). Single source of truth for the dynamics.
+   (``simulate_cohort_years`` drives full-horizon replays and stops with an
+   error on infeasible schedules). Single source of truth for the dynamics.
 
 ``rh``
    Rolling-horizon coordination loop: cohort state table (ARE round-trip),
@@ -114,13 +115,15 @@ Design Invariants
 Hold these when extending the package; each exists because its violation
 already happened upstream once.
 
-**femic owns the Woodstock text.** The no-LU bridge is written by femic's
-own stage-2 writer (``femic.ws3_bridge.build_ws3_sections_from_femic_woodstock``);
-fresh-salvage stages the smashed, LU-dropped CSVs and then *verifies* the
-written bridge (LU theme absent, ages on the midpoint lattice, ARE area
-conserved to 1e-6 against staging — the writer silently drops area rows
-whose ``(tsa, ifm, au_id)`` key has no curve). Never hand-write bridge
-sections here.
+**femic owns the Woodstock text.** The WS3 input files are written by
+femic's own stage-2 writer
+(``femic.ws3_bridge.build_ws3_sections_from_femic_woodstock``);
+fresh-salvage adjusts the staging table (snaps ages to class midpoints),
+hands it to that writer — which re-groups rows on the remaining key and
+sums areas — and then *verifies* the written bridge (theme count as
+expected, ages on the midpoint lattice, ARE area conserved to 1e-6 against
+staging — the writer silently drops area rows whose ``(tsa, ifm, au_id)``
+key has no curve). Never hand-write bridge sections here.
 
 **fire.py is the single source of truth for dynamics.** The agent LP rows
 are the same harvest -> fire -> salvage -> decay equations as
@@ -202,10 +205,6 @@ femic
    The FRESH-ecosystem package whose stage-1/stage-2 pipeline produces the
    validated TSA29 Woodstock CSVs and WS3 bridge this package consumes.
 
-LU (landscape unit)
-   The predecessor subset dimension (11 LUs); deliberately dropped — the
-   pipeline runs the full TSA and the rebuilt bridge carries no LU theme.
-
 FESBC
    Forest Enhancement Society of BC — the empirical salvage-support
    benchmark (~14-15 $/m3) the calibrated flip point is compared against.
@@ -213,3 +212,17 @@ FESBC
 BEC
    Biogeoclimatic Ecosystem Classification — the zone system behind the
    MFRI table (SBPS, SBS, MS, IDF, ESSF, ICH, ...).
+
+LP
+   Linear program — an optimization problem with a linear objective and
+   linear constraints. Every optimization layer in this package is a
+   continuous LP solved by HiGHS.
+
+NPV
+   Net present value — future cashflows discounted to today at the
+   configured discount rate (3%/yr by default).
+
+Stumpage
+   The per-m3 fee a BC licensee pays the Crown for standing timber;
+   fire-damaged timber is charged at the tabular floor (0.25 $/m3 by
+   default here).

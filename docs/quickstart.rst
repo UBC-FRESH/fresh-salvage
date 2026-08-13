@@ -61,10 +61,11 @@ femic TSA29 WS3 bridge, then run the deterministic smoke profile first:
 
 The smoke profile solves a 3-period horizon in seconds (output under
 ``outputs/ws3_smoke``); its objective, 24,328,759.75 m3, is the recorded
-regression anchor. The production profile (drop ``--smoke``) rebuilds the
-no-LU bridge into ``<output_root>/derived/ws3_bridge_no_lu``, compiles the
-full-TSA model, and solves the configured 30-period horizon — budget about
-24 minutes end-to-end. Artifacts: ``data/<run>-schedule.parquet`` / ``.csv``
+regression anchor. The production profile (drop ``--smoke``) first rebuilds
+the WS3 input files into ``<output_root>/derived/ws3_bridge_no_lu``,
+compiles the full-TSA model,
+and solves the configured 30-period horizon — budget about 24 minutes
+end-to-end. Artifacts: ``data/<run>-schedule.parquet`` / ``.csv``
 and ``manifests/<run>-ws3-manifest.json``.
 
 Step 3: First Rolling-Horizon Run
@@ -131,9 +132,9 @@ The manifest is the audit record of the run. Fields to check first:
 Next Steps
 ----------
 
-- :doc:`model_semantics` for the fire and inventory equations the LPs
-  implement, and for the known limitations you should read before trusting
-  any number.
+- :doc:`model_semantics` for how the WS3 input files are built, the fire
+  and inventory equations the LPs implement, and the known limitations
+  you should read before trusting any number.
 - :doc:`cli` for every command, flag, config field, and artifact.
 - ``examples/ensemble_tsa29.yaml`` for a 4-scenario parallel smoke grid, and
   :doc:`ensembles` for scenario sweeps such as the subsidy flip-point curve

@@ -12,7 +12,7 @@ Setup
    python -m pip install -e .[dev]
 
 The ``dev`` extra carries pytest, ruff, Sphinx, the RTD theme, build, and
-twine. Python 3.11 is the minimum supported version (CI tests 3.11 and
+twine. Python 3.11 is the oldest supported version (CI tests 3.11 and
 3.12).
 
 External Dependencies
@@ -42,7 +42,9 @@ Local Checks
    python -m build
    twine check dist/*
 
-The suite holds 198 tests. Ruff is configured for rule sets ``E``, ``F``,
+The suite holds 203 tests (201 passed, 2 skipped unless the optional ws3
+checkout is on ``PYTHONPATH``; with it, all 203 pass). Ruff is configured
+for rule sets ``E``, ``F``,
 ``I``, ``UP``, and ``W`` at a 100-column line length, targeting Python
 3.11. Both checks must stay clean on every commit; docs-only edits should
 not affect either, but verify before committing. The Sphinx build runs with
@@ -89,7 +91,7 @@ functions consumed by other layers.)
   ``ws3_bridge_age_unsmashed``, ``principal_are_unparseable``,
   ``agent_offers_unknown_cohorts``, ``rh_state_duplicate_cohort``,
   ``ensemble_axis_unknown``.
-- Fail fast at the boundary: parse external inputs into typed Pydantic
+- **Fail fast at the boundary.** Parse external inputs into typed Pydantic
   records and raise on the first defect; core logic never re-validates
   defensively and never silently defaults (an unknown BEC zone has no
   "nearest" fire rate).
@@ -105,7 +107,7 @@ Every run emits a JSON manifest under ``manifests/`` built from a typed
 status, headline metrics, input SHA-256 digests, the full effective config
 snapshot (defaults resolved), and the run's diagnostics. Artifact paths live
 behind ``ArtifactLayout`` (``data/`` / ``manifests/`` / ``logs/`` under the
-configured ``output_root``; file names slugged from the run id). When you
+configured ``output_root``; file names derived from the run id). When you
 add a pipeline output, write it through the layout and record its provenance
 in the manifest — a result without provenance is treated as non-evidence in
 this project.
