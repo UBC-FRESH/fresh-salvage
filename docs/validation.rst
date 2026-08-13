@@ -3,7 +3,8 @@ Validation
 
 This page summarizes the Phase 6 validation record. The authoritative,
 full-detail source is ``planning/phase6-validation-report.md`` (status:
-both validation defects resolved, results re-generated, 2026-08-12); the
+both validation defects resolved, results re-generated, 2026-08-12;
+grade-transition monotonicity erratum fixed 2026-08-13); the
 economic rationale is ``planning/economics-calibration.md``. Numbers below
 are quoted from those records; ``outputs/`` paths referenced there are
 local, uncommitted run artifacts.
@@ -79,12 +80,12 @@ Post-adjustment reference numbers (calibrated defaults; subsidy 3.0 $/m3):
      - bit-identical regression anchor (WS3 consumes the bridge, not the
        stands table or the economics)
    * - RH 100-year green harvest
-     - 36,249,151.9 m3
-     - decadal profile 4.849 / 4.569 / 4.238 / 3.979 / 3.717 / 3.479 /
-       3.217 / 2.982 / 2.726 / 2.494 M m3 (workers 64)
+     - 36,279,574.5 m3
+     - decadal profile 4.951 / 4.564 / 4.230 / 3.973 / 3.709 / 3.469 /
+       3.210 / 2.971 / 2.715 / 2.486 M m3 (workers 64)
    * - RH 100-year burned salvage at subsidy 3.0
      - 0.00 m3
-     - as calibrated: the smallest DT margin (Cedar_ESSF -15.54 + 3.0)
+     - as calibrated: the smallest DT margin (Cedar_ESSF -20.70 + 3.0)
        stays negative
    * - Area burned
      - ~201 kha/decade (~2.01 Mha over 100 years)
@@ -131,8 +132,8 @@ The Subsidy Flip Curve
 ----------------------
 
 The coupled system's response to ``subsidy_rate_per_m3`` (burn-rate
-multiplier 1.0; per-scenario ``workers: 1``; 26/26 prescribed scenarios
-optimal plus a 5-scenario fine probe):
+multiplier 1.0; per-scenario ``workers: 1``; 31/31 scenarios of a
+15.0-30.0 step-0.5 sweep optimal, plus a 10-scenario fine probe):
 
 .. list-table::
    :header-rows: 1
@@ -140,31 +141,38 @@ optimal plus a 5-scenario fine probe):
    * - Subsidy ($/m3)
      - Total salvage, 100 yr (m3)
      - Step-1 salvage (m3)
-   * - 0 - 19.0
+   * - 0 - 23.8
      - 0.00
      - 0.00
-   * - 19.1
+   * - 23.85
      - 61,549.50
      - 15,907.90
-   * - 19.2 - 19.3
+   * - 23.9 - 24.05
      - 288,479.53
      - 43,142.77
-   * - >= 19.4
+   * - >= 24.1
      - 1,338,477.16 (flat, maximal)
      - 181,238.68
 
-Turn-on at ~19.1, ramp across 19.1-19.4, saturation by 19.4 — exactly the
-volume-weighted SPF development-type breakevens (19.09-19.40) predicted by
-the calibration. The ramp is narrow because every ARE cohort in the WS3
-bridge maps to one of the four SPF development types; the wider
-species-level heterogeneity (Cedar ~15.5, Hem-Bal ~19.6, Other ~27-30 $/m3
-breakevens) does not bind because no bridge stratum maps to those DTs. The
-FESBC 14-15 $/m3 benchmark sits slightly below the turn-on: benchmark-level
-support closes ~75-80% of the margin gap but does not flip the program.
+(The sweep measured 15.0-30.0 directly; below 15.0 the zero follows from
+the margin arithmetic — every DT margin at subsidy 0 is <= -20.70 $/m3, so
+no subsidy under 20.70 can make salvage positive — plus the pre-erratum
+sweeps, which measured 0.00 across 0-15 under a strictly higher price
+surface.)
+
+Turn-on at ~23.85, ramp across 23.85-24.1, saturation by 24.1 — exactly
+the volume-weighted SPF development-type breakevens (23.85-24.07)
+predicted by the calibration. The ramp is narrow because every ARE cohort
+in the WS3 bridge maps to one of the four fire-exposed SPF development
+types; the wider species-level heterogeneity (Cedar ~20.7-21.5, Hem-Bal
+~24.3, Other ~29-32 $/m3 breakevens) does not bind because no bridge
+stratum maps to those DTs. The FESBC 14-15 $/m3 benchmark sits well below
+the turn-on: benchmark-level support closes ~60% of the margin gap but
+does not flip the program.
 
 Green harvest is subsidy-invariant (36,279,196.26 m3 at burn x1.0, max
 pairwise spread 7.5e-9 — solver precision); the small delta vs the
-36,249,151.9 m3 base-case total above is the ``workers``-numerics caveat
+36,279,574.5 m3 base-case total above is the ``workers``-numerics caveat
 under Predecessor-Parity Caveats below. Salvage never displaces green
 harvest. The burn x0.0 control is exactly zero at every subsidy.
 
@@ -178,49 +186,55 @@ cost stack 56 + 38 + 0.25 = 94.25 $/m3):
      - Burned price ($/m3)
      - Margin at subsidy 0 ($/m3)
    * - Cedar_ESSF
-     - 78.71
-     - -15.54
+     - 73.55
+     - -20.70
    * - Cedar_ICH
-     - 77.80
-     - -16.45
+     - 72.79
+     - -21.46
    * - SPF_ESSF
-     - 75.16
-     - -19.09
+     - 70.40
+     - -23.85
+   * - SPF_CWH
+     - 70.39
+     - -23.86
    * - SPF_MS
-     - 75.15
-     - -19.10
+     - 70.39
+     - -23.86
    * - SPF_IDF
-     - 74.88
-     - -19.37
+     - 70.20
+     - -24.05
    * - SPF_SBPS
-     - 74.85
-     - -19.40
+     - 70.18
+     - -24.07
    * - Hem-Bal_ICH
-     - 74.66
-     - -19.59
+     - 69.98
+     - -24.27
    * - SPF_ICH
-     - 74.01
-     - -20.24
+     - 69.62
+     - -24.63
    * - Other_MS
-     - 67.35
-     - -26.90
+     - 64.82
+     - -29.43
    * - Other_ICH
-     - 66.52
-     - -27.73
+     - 64.29
+     - -29.96
    * - Other_SBPS
-     - 64.94
-     - -29.31
+     - 63.10
+     - -31.15
    * - Other_IDF
-     - 63.93
-     - -30.32
+     - 62.38
+     - -31.87
 
 **History, for honesty.** The first calibration round produced no flip
 inside 0-25 $/m3 (the grey-stage grade mix was double-counted with the
 0.85/yr decay, driving breakevens to ~48 $/m3); the prompt-salvage
 adjustment of 2026-08-12 retargeted the grade mix to the year 1-3 regime
-and moved the flip to the high teens. The pre-calibration placeholder
+and moved the flip to the high teens — but its Sawlog row still carried a
+physically impossible 0.10 Sawlog->Peeler upgrade, caught in review and
+fixed on 2026-08-13 (the burned sawlog remainder now drops straight to
+pulp), moving the flip to 23.85-24.1 $/m3. The pre-calibration placeholder
 economics showed a flat, subsidy-invariant response (~+93 $/m3
-unsubsidized margin). Both superseded states are documented in the
+unsubsidized margin). All superseded states are documented in the
 validation report — cite the current calibration only.
 
 Predecessor-Parity Caveats

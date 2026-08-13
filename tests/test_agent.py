@@ -74,20 +74,21 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
       127 x 0.65 = 82.55 $/m3, salvage margin 82.55 - 56 - 38 - 0.25 =
       -11.70 $/m3;
     - transition mix (the expected realized price of a green sawlog after
-      burn degradation through ``BURNED_GRADE_TRANSITION``):
-      0.65 x (0.80 x 127 + 0.10 x 146 + 0.10 x 55) = 79.105 $/m3, margin
-      79.105 - 56 - 38 - 0.25 = -15.145 $/m3 — the headline ~-15 $/m3
-      prompt-salvage basis;
+      burn degradation through ``BURNED_GRADE_TRANSITION``; the transition
+      is downgrade-only — the burned sawlog remainder drops to pulp, never
+      up to peel): 0.65 x (0.80 x 127 + 0.00 x 146 + 0.20 x 55) = 73.19
+      $/m3, margin 73.19 - 56 - 38 - 0.25 = -21.06 $/m3 — the headline
+      ~-21 $/m3 prompt-salvage basis;
     - development-type mix (the agent LP's actual cohort price: the SPF
       grade split pushed through the full transition matrix): destination
       shares saw 0.805 x 0.80 + 0.092 x 0.35 = 0.6762, peel
-      0.805 x 0.10 + 0.092 x 0.55 = 0.1311, pulp 0.805 x 0.10 + 0.092 x 0.10
-      + 0.103 = 0.1927, price 0.65 x (0.6762 x 127 + 0.1311 x 146
-      + 0.1927 x 55) = 75.15 $/m3, margin -19.10 $/m3.
+      0.805 x 0.00 + 0.092 x 0.55 = 0.0506, pulp 0.805 x 0.20 + 0.092 x 0.10
+      + 0.103 = 0.2732, price 0.65 x (0.6762 x 127 + 0.0506 x 146
+      + 0.2732 x 55) = 70.39 $/m3, margin -23.86 $/m3.
 
     Fire-killed wood is a net cost to recover without the subsidy on every
     basis — the behavioral property the recalibration was required to
-    produce — but the gap is now moderate (low-to-mid teens on the prompt
+    produce — but the gap is now moderate (low-to-mid twenties on the prompt
     sawlog stream), so the minimum-subsidy question stays genuinely open.
     """
 
@@ -112,15 +113,15 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
     assert burned_price - burned_costs == pytest.approx(-11.70)
 
     # Transition mix: expected realized price of a green sawlog after burn
-    # degradation (the ~-15 $/m3 prompt-salvage headline).
+    # degradation (the ~-21 $/m3 prompt-salvage headline).
     transition = data.BURNED_GRADE_TRANSITION["Sawlog"]
     transition_price = data.BURNED_PRICE_DISCOUNT * (
         transition["Sawlog"] * data.GREEN_PRICES["SPF_Sawlog"]
         + transition["Peeler"] * data.GREEN_PRICES["SPF_Peelers"]
         + transition["Pulpwood"] * data.GREEN_PRICES["SPF_Pulpwood"]
     )
-    assert transition_price == pytest.approx(79.105)
-    assert transition_price - burned_costs == pytest.approx(-15.145)
+    assert transition_price == pytest.approx(73.19)
+    assert transition_price - burned_costs == pytest.approx(-21.06)
 
     # Development-type mix: the agent LP's actual volume-weighted SPF price
     # (the species grade split pushed through the full transition matrix).
@@ -133,15 +134,15 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
         for grade_out in ("Sawlog", "Peeler", "Pulpwood")
     }
     assert destination_share["Sawlog"] == pytest.approx(0.6762)
-    assert destination_share["Peeler"] == pytest.approx(0.1311)
-    assert destination_share["Pulpwood"] == pytest.approx(0.1927)
+    assert destination_share["Peeler"] == pytest.approx(0.0506)
+    assert destination_share["Pulpwood"] == pytest.approx(0.2732)
     dt_price = data.BURNED_PRICE_DISCOUNT * sum(
         destination_share[grade_out]
         * data.GREEN_PRICES[f"SPF_{data.GRADE_COLUMN_SUFFIX[grade_out]}"]
         for grade_out in destination_share
     )
-    assert dt_price == pytest.approx(75.150725)
-    assert dt_price - burned_costs == pytest.approx(-19.099275)
+    assert dt_price == pytest.approx(70.38915)
+    assert dt_price - burned_costs == pytest.approx(-23.86085)
 
 
 def test_unsubsidized_salvage_is_not_economic_at_calibrated_costs() -> None:

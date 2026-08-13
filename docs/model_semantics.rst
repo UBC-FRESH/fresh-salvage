@@ -468,10 +468,12 @@ named axis. The defaults are the calibrated constants:
      - 0.03
      - predecessor default, retained
    * - Burned grade transition (saw -> saw/peel/pulp)
-     - 0.80 / 0.10 / 0.10
+     - 0.80 / 0.00 / 0.20
      - prompt-salvage (year 1-3) retention; red-stage evidence (Plank 1984;
        Loeffler & Anderson 2018); the grey-stage pulp collapse lives in the
-       0.85/yr decay, not the initial mix
+       0.85/yr decay, not the initial mix; downgrade-only (Peel > Saw >
+       Pulp — fire never upgrades grade), so the saw remainder drops to
+       pulp
    * - Burned grade transition (peel -> saw/peel/pulp)
      - 0.35 / 0.55 / 0.10
      - same regime
@@ -485,19 +487,19 @@ Margin decompositions on the SPF price bases (pinned by tests):
 
    green   = 127.00 - 45 - 30 - 15    = +37.00 $/m3   (sawlog basis)
    salvage =  82.55 - 56 - 38 - 0.25  = -11.70 $/m3   (sawlog basis)
-   salvage =  79.105 - 56 - 38 - 0.25 = -15.15 $/m3   (transition mix)
+   salvage =  73.19 - 56 - 38 - 0.25  = -21.06 $/m3   (transition mix)
 
 The agent LP does not price cohorts at the sawlog price: each cohort carries
 its development type's volume-weighted average over the grade columns, with
 burned volume grade-degraded. On the real stands table the calibrated
 constants give green margins positive everywhere (SPF ~ +31.3, Cedar
 ~ +46.9, Hem-Bal ~ +25.0, Df-Larch ~ +9.4, Other ~ 0 $/m3) and salvage
-margins at subsidy 0 in a moderate negative band (Cedar ~ -9.9, SPF ~ -19.1,
-Hem-Bal ~ -22.9, Df-Larch ~ -32.0, Other ~ -35.8 $/m3) — negative for 100%
-of the burned volume, so salvage is not economic without support. The
-coupled system's behavioural flip sits at a subsidy of approximately 19.2
-$/m3 (turn-on 19.1, saturated by 19.4 — the SPF cluster's breakevens); the
-FESBC benchmark support of 14-15 $/m3 closes roughly 75-80% of the margin
+margins at subsidy 0 in a moderate negative band (Cedar ~ -15.7, SPF
+~ -23.9, Hem-Bal ~ -27.2, Df-Larch ~ -35.3, Other ~ -35.8 $/m3) — negative
+for 100% of the burned volume, so salvage is not economic without support.
+The coupled system's behavioural flip sits at a subsidy of approximately
+24 $/m3 (turn-on 23.85, saturated by 24.1 — the SPF cluster's breakevens);
+the FESBC benchmark support of 14-15 $/m3 closes roughly 60% of the margin
 gap but does not flip the program. The full per-DT table and the sweep
 evidence are in :doc:`validation`.
 

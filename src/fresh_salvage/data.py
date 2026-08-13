@@ -134,8 +134,12 @@ COVERAGE_DENOMINATOR_COLUMN = "FEATURE_AREA_SQM"
 # BURNED_PRICE_DISCOUNT (0.65). The grey-stage (5-10 yr) collapse to pulp is
 # handled by the 0.85/yr burned-inventory decay — putting it in the initial
 # mix would double-count the time decay.
+# Grade hierarchy is Peel > Saw > Pulp and fire can only DEGRADE grade, so
+# every row is downgrade-only (each row still sums to 1.0, keeping burned
+# volume conserved): the ~20% of burned sawlog volume that does not hold
+# sawlog grade drops straight to pulp — fire never upgrades sawlog to peel.
 BURNED_GRADE_TRANSITION = {
-    "Sawlog": {"Sawlog": 0.80, "Peeler": 0.10, "Pulpwood": 0.10},
+    "Sawlog": {"Sawlog": 0.80, "Peeler": 0.00, "Pulpwood": 0.20},
     "Peeler": {"Sawlog": 0.35, "Peeler": 0.55, "Pulpwood": 0.10},
     "Pulpwood": {"Sawlog": 0.0, "Peeler": 0.0, "Pulpwood": 1.0},
 }

@@ -183,20 +183,20 @@ against the subsidy axis. The recorded curve (burn x1.0; from
    * - Subsidy ($/m3)
      - Total salvage, 100 yr (m3)
      - Reading
-   * - 0 - 19.0
+   * - 0 - 23.8
      - 0.00
      - Below every development type's breakeven: salvage is a net cost, the
        agent declines it, and the subsidy is a pure transfer on the offered
        burned stock (principal objective falls ~33.4k $ per $/m3; agent
        objective flat at 130,041,680.42).
-   * - 19.1
+   * - 23.85
      - 61,549.50
-     - Turn-on: the lowest-breakeven SPF DT (SPF_ESSF, 19.09) crosses zero
+     - Turn-on: the lowest-breakeven SPF DT (SPF_ESSF, 23.85) crosses zero
        margin.
-   * - 19.2 - 19.3
+   * - 23.9 - 24.05
      - 288,479.53
      - Ramp: SPF_MS joins; the principal's offer surface re-prices.
-   * - >= 19.4
+   * - >= 24.1
      - 1,338,477.16
      - Saturation: all four SPF DTs are over breakeven and the program
        reaches the physical maximum — the full fire influx on the
@@ -210,7 +210,7 @@ Three structural facts to check in any sweep you run:
   max pairwise spread at solver precision): salvage never displaces green
   harvest, it recovers volume that would otherwise decay.
 - The flip location is the volume-weighted SPF breakeven predicted by the
-  calibration (~19.1-19.4 $/m3); the FESBC 14-15 $/m3 benchmark sits
-  slightly below the turn-on, which is exactly the gap a minimum-subsidy
+  calibration (~23.9-24.1 $/m3); the FESBC 14-15 $/m3 benchmark sits
+  well below the turn-on, which is exactly the gap a minimum-subsidy
   analysis targets. If a future recalibration moves the DT margins, expect
   the flip to move with them.

@@ -397,13 +397,38 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
     assert cedar["Cedar_Sawlog_Vol"] == pytest.approx(200.0 * 0.805)
     assert cedar["Cedar_Peelers_Vol"] == pytest.approx(200.0 * 0.092)
     assert cedar["Cedar_Pulpwood_Vol"] == pytest.approx(200.0 * 0.103)
+
+    # Destination shares derived from the constants (never re-hardcoded):
+    # grade split pushed through BURNED_GRADE_TRANSITION.
+    splits = data.SPECIES_GRADE_SPLIT["Cedar"]
+    transition = data.BURNED_GRADE_TRANSITION
+    destination_share = {
+        grade_out: sum(
+            splits[grade_in] * transition[grade_in][grade_out] for grade_in in splits
+        )
+        for grade_out in ("Sawlog", "Peeler", "Pulpwood")
+    }
+    # Every transition row sums to 1.0, so burned volume is conserved
+    # (200 * 0.30 = 60 m3 redistributed across the three destinations).
+    assert all(sum(row.values()) == pytest.approx(1.0) for row in transition.values())
+    assert sum(destination_share.values()) == pytest.approx(1.0)
+    # Fire can only degrade grade (Peel > Saw > Pulp): no row may assign share
+    # to a higher grade — the Sawlog->Peeler upgrade that review caught.
+    assert transition["Sawlog"]["Peeler"] == 0.0
+    assert transition["Pulpwood"]["Sawlog"] == 0.0
+    assert transition["Pulpwood"]["Peeler"] == 0.0
     # B_Cedar_Sawlog_Vol = live * frac * (split_saw * t_ss + split_peel * t_ps)
     # = 200*0.30*(0.805*0.80 + 0.092*0.35) (prompt-salvage grade retention).
-    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(40.572)
-    # B_Cedar_Peelers_Vol includes Sawlog->Peeler and Peeler->Peeler transitions.
-    assert cedar["B_Cedar_Peelers_Vol"] == pytest.approx(
-        200 * 0.30 * (0.805 * 0.10 + 0.092 * 0.55)
+    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(
+        200 * 0.30 * destination_share["Sawlog"]
     )
+    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(40.572)
+    # B_Cedar_Peelers_Vol is Peeler->Peeler retention only: burned sawlog
+    # downgrades straight to pulp, never up to peel (0.805*0.00 + 0.092*0.55).
+    assert cedar["B_Cedar_Peelers_Vol"] == pytest.approx(
+        200 * 0.30 * destination_share["Peeler"]
+    )
+    assert cedar["B_Cedar_Peelers_Vol"] == pytest.approx(3.036)
 
 
 def test_other_species_volume(tmp_path: Path) -> None:

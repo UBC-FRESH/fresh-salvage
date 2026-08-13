@@ -77,3 +77,19 @@ The release is expected to pass (the suite was green at the pre-docs HEAD
 - `python -m pytest` — 198 passed (with `PYTHONPATH` pointing at the ws3
   checkout).
 - `sphinx-build -b html docs _build/html -W` — clean.
+
+### Post-Release Notes
+
+- **2026-08-13 — grade-transition monotonicity erratum.** Review caught a
+  modeling error in the shipped `BURNED_GRADE_TRANSITION`: the Sawlog row's
+  0.10 Sawlog->Peeler share was a physically impossible upgrade (fire can
+  only degrade grade; hierarchy Peel > Saw > Pulp). Fixed on `main` to
+  {Saw 0.80, Peel 0.00, Pulp 0.20}; rows remain downgrade-only and sum to
+  1.0, so burned volume is conserved. Re-derived consequences versus the
+  numbers quoted above: SPF transition-mix salvage margin -15.15 ->
+  -21.06 $/m3, development-type mix -19.10 -> -23.86 $/m3, and the
+  coupled-system subsidy flip ≈ 19.2 -> ≈ 23.9-24.1 $/m3 (turn-on 23.85,
+  saturated by 24.1). The "Calibrated economics" headline above and any
+  flip ≈ 19.2 $/m3 / margin ≈ -15 $/m3 statements elsewhere in this
+  entry are superseded; `planning/economics-calibration.md` (erratum note)
+  and `planning/phase6-validation-report.md` carry the current values.

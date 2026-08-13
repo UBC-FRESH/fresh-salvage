@@ -12,9 +12,9 @@
 #
 #   fresh-salvage ensemble-run examples/ensemble_flip_sweep.yaml --json
 #
-# Optional fine probe that resolves the turn-on (5 scenarios; append a
-# second axes block run or edit in place):
-#   subsidy_rate_per_m3: [19.0, 19.1, 19.2, 19.3, 19.4]
+# Optional fine probe that resolves the turn-on (append a second axes
+# block run or edit in place), e.g. around the post-erratum window:
+#   subsidy_rate_per_m3: [23.8, 23.85, 23.9, 24.0, 24.05, 24.1]
 #   burn_rate_multiplier: [1.0]
 #
 # The paths below are machine-relative outputs of the earlier phases plus the
@@ -45,9 +45,9 @@ base:
   burned_limit_annual_m3: null
 axes:
   # Principal policy instrument ($ per m3 of burned volume salvaged). The
-  # calibrated SPF development-type breakevens sit at 19.09-19.40 $/m3, so
-  # the response is a ramp across ~19.1-19.4 and saturates at the physical
-  # maximum 1,338,477.16 m3; the FESBC 14-15 $/m3 benchmark sits just below
+  # calibrated SPF development-type breakevens sit at 23.85-24.07 $/m3, so
+  # the response is a ramp across ~23.9-24.1 and saturates at the physical
+  # maximum 1,338,477.16 m3; the FESBC 14-15 $/m3 benchmark sits well below
   # the turn-on.
   subsidy_rate_per_m3: [0.0, 5.0, 8.0, 10.0, 12.0, 14.0, 15.0, 16.0, 18.0, 20.0, 22.0, 25.0, 30.0]
   # Future fire-pattern axis; 0.0 is the fire-free control (salvage exactly

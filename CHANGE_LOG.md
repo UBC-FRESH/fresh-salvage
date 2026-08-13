@@ -5,6 +5,25 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Grade-transition monotonicity fix: `BURNED_GRADE_TRANSITION` Sawlog row
+  corrected from {Saw 0.80, Peel 0.10, Pulp 0.10} to {Saw 0.80, Peel 0.00,
+  Pulp 0.20} — the 0.10 Sawlog->Peeler share was a physically impossible
+  upgrade (grade hierarchy Peel > Saw > Pulp; fire can only degrade
+  grade), caught in review. Rows remain downgrade-only and sum to 1.0, so
+  burned volume is conserved (`Total_Burned_Vol` 79,087.38 m3
+  bit-identical; the `B_*_Peelers_Vol`/`B_*_Pulpwood_Vol` split
+  re-derived). Re-derived economics: SPF transition-mix salvage margin
+  -15.15 -> -21.06 $/m3, DT-mix margin -19.10 -> -23.86 $/m3; the
+  coupled-system flip moves from ≈ 19.1-19.4 to ≈ 23.9-24.1 $/m3
+  (turn-on 23.85, saturated by 24.1 — the SPF cluster's breakevens), with
+  the ramp levels bit-identical and the FESBC 14-15 $/m3 benchmark now
+  closing only ~60% of the margin gap. Tests re-pinned from the constants
+  (with new downgrade-only and row-sum guards); ingestion, ws3 smoke
+  (24,328,759.75 m3, bit-identical), the 100-year RH dev run (salvage
+  0.00 m3 at the default subsidy 3), and the flip sweep (31 + 10 + 2
+  scenarios, all optimal) re-run; `planning/economics-calibration.md`
+  carries the erratum note and `planning/phase6-validation-report.md`
+  supersedes the 19.1-19.4 flip record.
 - `ensemble-run --strict`: a completed ensemble now exits 1 when any
   scenario failed (status `partial` or `failed`); without the flag,
   completed ensembles still exit 0. Fatal grid/input/bridge failures exit 1

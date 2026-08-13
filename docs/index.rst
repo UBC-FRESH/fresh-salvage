@@ -27,10 +27,10 @@ whole scenario grids (ensembles) in parallel.
 
 The TSA29 case study is calibrated against the 2025 fire-season
 burn-severity layer and Q4-2023 BC Interior log market anchors. Under
-the calibrated economics, unsubsidized salvage loses roughly 15 $/m3 on
+the calibrated economics, unsubsidized salvage loses roughly 21 $/m3 on
 the SPF transition-mix basis, and the coupled system flips across a
-subsidy of approximately 19.1-19.4 $/m3: salvage turns on at 19.1 and
-saturates by 19.4. That band sits slightly above the FESBC benchmark
+subsidy of approximately 23.9-24.1 $/m3: salvage turns on at 23.85 and
+saturates by 24.1. That band sits well above the FESBC benchmark
 support level of 14-15 $/m3. Every parameter is visible in the config
 files, and every run writes a provenance manifest (inputs, checksums,
 config snapshot), so results stay auditable. The current release is

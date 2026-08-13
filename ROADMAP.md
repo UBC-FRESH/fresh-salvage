@@ -192,9 +192,12 @@ economic surface against BC anchors, and ship the documentation suite.
   - [x] Economic recalibration (`bb4707e`, evidence `0e94ff4`): BC-anchored
         prices/costs/stumpage, config-visible `Economics` surface.
   - [x] Prompt-salvage adjustment (`e828dc6`): grade mix retargeted to the
-        year 1-3 regime; unsubsidized salvage margin ≈ -15 $/m3; flip
-        ≈ 19.2 $/m3; FESBC benchmark 14-15 $/m3 sits just below the
-        turn-on. Full record: `planning/phase6-validation-report.md` and
+        year 1-3 regime. Grade-transition monotonicity erratum (2026-08-13):
+        the Saw row's 0.10 Saw->Peel share was a physically impossible
+        upgrade, moved to pulp (Saw 0.80 / Peel 0.00 / Pulp 0.20);
+        unsubsidized salvage margin ≈ -21 $/m3; flip ≈ 23.9-24.1 $/m3;
+        FESBC benchmark 14-15 $/m3 sits well below the turn-on. Full
+        record: `planning/phase6-validation-report.md` and
         `planning/economics-calibration.md`.
 - [ ] P6.2 Documentation suite and release notes (README, Sphinx guides,
       `CHANGE_LOG.md`, this roadmap, `RELEASE_NOTES.md`, version 0.1.0a1).
