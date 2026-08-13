@@ -380,21 +380,30 @@ parse time.
 
 The severity rating describes a burn-severity survey polygon that generally
 covers only part of the VRI polygon, so each rated row is coverage-scaled
-(FS-VAL-02):
+(FS-VAL-02). Two area columns feed the scaling:
+
+``FEATURE_AREA_SQM``
+   Area (m2) of the VRI stand polygon — the inventory feature the row
+   describes.
+
+``SHAPE_Area_1``
+   Area (m2) of the fire-severity polygon from the severity-rating layer
+   that overlaps this stand.
 
 .. code-block:: text
 
    coverage    = min(1, SHAPE_Area_1 / FEATURE_AREA_SQM)
    salvageable = severity_fraction * coverage * live_volume
 
-**Upper-bound caveat.** Both columns are whole-polygon attributes of their
-respective layers, so the ratio is not a true spatial intersection: when the
-severity polygon is smaller than the VRI polygon the ratio assumes the
-entire severity polygon lies inside this stand; when it is larger the clamp
-assumes full coverage. Salvageable volume on rated stands is therefore an
-**upper bound**. Rated rows with a missing/non-positive denominator
-(``FEATURE_AREA_SQM``) or numerator (``SHAPE_Area_1``) halt ingestion
-(``data_coverage_denominator_invalid`` / ``data_coverage_numerator_invalid``).
+Both columns are whole-polygon attributes of their respective layers;
+neither is clipped to the other. The ratio is therefore an upper bound on
+the covered share: if the severity polygon is smaller than the stand
+polygon the ratio assumes it lies entirely inside this stand, and if it is
+larger the clamp to 1 assumes full coverage. Salvageable volume on rated
+stands is therefore an **upper bound**. Rated rows with a
+missing/non-positive denominator (``FEATURE_AREA_SQM``) halt ingestion
+(``data_coverage_denominator_invalid``); a missing/non-positive numerator
+(``SHAPE_Area_1``) halts ingestion (``data_coverage_numerator_invalid``).
 
 On the real layer this correction cut total salvageable volume from
 119,585.72 to 79,087.38 m3 (-34%; green volume unchanged). Burned volume is
