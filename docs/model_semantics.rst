@@ -426,19 +426,19 @@ named axis. The defaults are the calibrated constants:
    * - Parameter
      - Default
      - Provenance
-   * - Green prices, SPF saw/peel/pulp ($/m3)
-     - 127 / 146 / 55
+   * - Green prices, SPF peel/saw/pulp ($/m3)
+     - 146 / 127 / 55
      - SPF sawlog at the Q4-2023 BC Interior Log Market Report level
        (market anchor); peeler = saw x 1.15 and pulp at market pulpwood are
        assumptions
-   * - Green prices, Df-Larch ($/m3)
-     - 103 / 118 / 55
+   * - Green prices, Df-Larch peel/saw/pulp ($/m3)
+     - 118 / 103 / 55
      - same anchors (sawlog benchmark; peeler/pulp assumptions)
-   * - Green prices, Hem-Bal ($/m3)
-     - 120 / 138 / 55
+   * - Green prices, Hem-Bal peel/saw/pulp ($/m3)
+     - 138 / 120 / 55
      - same anchors
-   * - Green prices, Cedar ($/m3)
-     - 144 / 166 / 55
+   * - Green prices, Cedar peel/saw/pulp ($/m3)
+     - 166 / 144 / 55
      - same anchors
    * - Green price, Other ($/m3)
      - 90
@@ -476,16 +476,15 @@ named axis. The defaults are the calibrated constants:
    * - ``discount_rate``
      - 0.03
      - predecessor default, retained
-   * - Burned grade transition (saw -> saw/peel/pulp)
-     - 0.80 / 0.00 / 0.20
+   * - Burned grade transition (peel -> peel/saw/pulp)
+     - 0.55 / 0.35 / 0.10
      - prompt-salvage (year 1-3) retention; red-stage evidence (Plank 1984;
        Loeffler & Anderson 2018); the grey-stage pulp collapse lives in the
        0.85/yr decay, not the initial mix; downgrade-only (Peel > Saw >
-       Pulp — fire never upgrades grade), so the saw remainder drops to
-       pulp
-   * - Burned grade transition (peel -> saw/peel/pulp)
-     - 0.35 / 0.55 / 0.10
-     - same regime
+       Pulp — fire never upgrades grade)
+   * - Burned grade transition (saw -> peel/saw/pulp)
+     - 0.00 / 0.80 / 0.20
+     - same regime; the saw remainder drops straight to pulp
    * - Burned grade transition (pulp)
      - stays pulp (1.0)
      - same regime

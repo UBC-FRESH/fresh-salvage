@@ -84,7 +84,7 @@ The release is expected to pass (the suite was green at the pre-docs HEAD
   modeling error in the shipped `BURNED_GRADE_TRANSITION`: the Sawlog row's
   0.10 Sawlog->Peeler share was a physically impossible upgrade (fire can
   only degrade grade; hierarchy Peel > Saw > Pulp). Fixed on `main` to
-  {Saw 0.80, Peel 0.00, Pulp 0.20}; rows remain downgrade-only and sum to
+  {Peel 0.00, Saw 0.80, Pulp 0.20}; rows remain downgrade-only and sum to
   1.0, so burned volume is conserved. Re-derived consequences versus the
   numbers quoted above: SPF transition-mix salvage margin -15.15 ->
   -21.06 $/m3, development-type mix -19.10 -> -23.86 $/m3, and the

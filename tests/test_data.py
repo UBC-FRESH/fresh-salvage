@@ -394,8 +394,8 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
     _, output = _run_ingest(tmp_path, make_synthetic_frame())
 
     cedar = output[output["FEATURE_ID"].astype(str) == "9"].iloc[0]
-    assert cedar["Cedar_Sawlog_Vol"] == pytest.approx(200.0 * 0.805)
     assert cedar["Cedar_Peelers_Vol"] == pytest.approx(200.0 * 0.092)
+    assert cedar["Cedar_Sawlog_Vol"] == pytest.approx(200.0 * 0.805)
     assert cedar["Cedar_Pulpwood_Vol"] == pytest.approx(200.0 * 0.103)
 
     # Destination shares derived from the constants (never re-hardcoded):
@@ -406,7 +406,7 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
         grade_out: sum(
             splits[grade_in] * transition[grade_in][grade_out] for grade_in in splits
         )
-        for grade_out in ("Sawlog", "Peeler", "Pulpwood")
+        for grade_out in ("Peeler", "Sawlog", "Pulpwood")
     }
     # Every transition row sums to 1.0, so burned volume is conserved
     # (200 * 0.30 = 60 m3 redistributed across the three destinations).
@@ -417,18 +417,18 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
     assert transition["Sawlog"]["Peeler"] == 0.0
     assert transition["Pulpwood"]["Sawlog"] == 0.0
     assert transition["Pulpwood"]["Peeler"] == 0.0
-    # B_Cedar_Sawlog_Vol = live * frac * (split_saw * t_ss + split_peel * t_ps)
-    # = 200*0.30*(0.805*0.80 + 0.092*0.35) (prompt-salvage grade retention).
-    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(
-        200 * 0.30 * destination_share["Sawlog"]
-    )
-    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(40.572)
     # B_Cedar_Peelers_Vol is Peeler->Peeler retention only: burned sawlog
-    # downgrades straight to pulp, never up to peel (0.805*0.00 + 0.092*0.55).
+    # downgrades straight to pulp, never up to peel (0.092*0.55 + 0.805*0.00).
     assert cedar["B_Cedar_Peelers_Vol"] == pytest.approx(
         200 * 0.30 * destination_share["Peeler"]
     )
     assert cedar["B_Cedar_Peelers_Vol"] == pytest.approx(3.036)
+    # B_Cedar_Sawlog_Vol = live * frac * (split_peel * t_ps + split_saw * t_ss)
+    # = 200*0.30*(0.092*0.35 + 0.805*0.80) (prompt-salvage grade retention).
+    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(
+        200 * 0.30 * destination_share["Sawlog"]
+    )
+    assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(40.572)
 
 
 def test_other_species_volume(tmp_path: Path) -> None:
@@ -519,17 +519,17 @@ def test_calibrated_economic_constants() -> None:
     """Pin the calibrated defaults (planning/economics-calibration.md)."""
 
     assert data.GREEN_PRICES == {
-        "SPF_Sawlog": 127,
         "SPF_Peelers": 146,
+        "SPF_Sawlog": 127,
         "SPF_Pulpwood": 55,
-        "Df-Larch_Sawlog": 103,
         "Df-Larch_Peelers": 118,
+        "Df-Larch_Sawlog": 103,
         "Df-Larch_Pulpwood": 55,
-        "Hem-Bal_Sawlog": 120,
         "Hem-Bal_Peelers": 138,
+        "Hem-Bal_Sawlog": 120,
         "Hem-Bal_Pulpwood": 55,
-        "Cedar_Sawlog": 144,
         "Cedar_Peelers": 166,
+        "Cedar_Sawlog": 144,
         "Cedar_Pulpwood": 55,
         "Other": 90,
     }

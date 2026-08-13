@@ -139,25 +139,25 @@ COVERAGE_DENOMINATOR_COLUMN = "FEATURE_AREA_SQM"
 # volume conserved): the ~20% of burned sawlog volume that does not hold
 # sawlog grade drops straight to pulp — fire never upgrades sawlog to peel.
 BURNED_GRADE_TRANSITION = {
-    "Sawlog": {"Sawlog": 0.80, "Peeler": 0.00, "Pulpwood": 0.20},
-    "Peeler": {"Sawlog": 0.35, "Peeler": 0.55, "Pulpwood": 0.10},
-    "Pulpwood": {"Sawlog": 0.0, "Peeler": 0.0, "Pulpwood": 1.0},
+    "Peeler": {"Peeler": 0.55, "Sawlog": 0.35, "Pulpwood": 0.10},
+    "Sawlog": {"Peeler": 0.00, "Sawlog": 0.80, "Pulpwood": 0.20},
+    "Pulpwood": {"Peeler": 0.0, "Sawlog": 0.0, "Pulpwood": 1.0},
 }
 
 # Species grading splits (green volume shares per market group).
 SPECIES_GRADE_SPLIT = {
-    "SPF": {"Sawlog": 0.805, "Peeler": 0.092, "Pulpwood": 0.103},
-    "Cedar": {"Sawlog": 0.805, "Peeler": 0.092, "Pulpwood": 0.103},
-    "Hem-Bal": {"Sawlog": 0.805, "Peeler": 0.092, "Pulpwood": 0.103},
-    "Df-Larch": {"Sawlog": 0.805, "Peeler": 0.092, "Pulpwood": 0.103},
-    "Other": {"Sawlog": 0.805, "Peeler": 0.092, "Pulpwood": 0.103},
+    "SPF": {"Peeler": 0.092, "Sawlog": 0.805, "Pulpwood": 0.103},
+    "Cedar": {"Peeler": 0.092, "Sawlog": 0.805, "Pulpwood": 0.103},
+    "Hem-Bal": {"Peeler": 0.092, "Sawlog": 0.805, "Pulpwood": 0.103},
+    "Df-Larch": {"Peeler": 0.092, "Sawlog": 0.805, "Pulpwood": 0.103},
+    "Other": {"Peeler": 0.092, "Sawlog": 0.805, "Pulpwood": 0.103},
 }
 
 # The output schema names the peeler grade columns "Peelers" while the
 # transition/split tables use the singular "Peeler".
 GRADE_COLUMN_SUFFIX = {
-    "Sawlog": "Sawlog",
     "Peeler": "Peelers",
+    "Sawlog": "Sawlog",
     "Pulpwood": "Pulpwood",
 }
 
@@ -180,17 +180,17 @@ BURNED_TRANSPORT_COST_PER_M3 = 38.0
 # Green prices ($/m3 FOB mill; BC Interior Log Market Report Q4-2023 anchors,
 # peeler = sawlog x 1.15 assumption, pulp at the market pulpwood level).
 GREEN_PRICES = {
-    "SPF_Sawlog": 127,
     "SPF_Peelers": 146,
+    "SPF_Sawlog": 127,
     "SPF_Pulpwood": 55,
-    "Df-Larch_Sawlog": 103,
     "Df-Larch_Peelers": 118,
+    "Df-Larch_Sawlog": 103,
     "Df-Larch_Pulpwood": 55,
-    "Hem-Bal_Sawlog": 120,
     "Hem-Bal_Peelers": 138,
+    "Hem-Bal_Sawlog": 120,
     "Hem-Bal_Pulpwood": 55,
-    "Cedar_Sawlog": 144,
     "Cedar_Peelers": 166,
+    "Cedar_Sawlog": 144,
     "Cedar_Pulpwood": 55,
     "Other": 90,
 }
@@ -315,33 +315,33 @@ SPECIES_SLOT_COLUMNS = [
 ]
 
 GRADE_COLUMNS = [
-    "SPF_Sawlog_Vol",
     "SPF_Peelers_Vol",
+    "SPF_Sawlog_Vol",
     "SPF_Pulpwood_Vol",
-    "Df-Larch_Sawlog_Vol",
     "Df-Larch_Peelers_Vol",
+    "Df-Larch_Sawlog_Vol",
     "Df-Larch_Pulpwood_Vol",
-    "Hem-Bal_Sawlog_Vol",
     "Hem-Bal_Peelers_Vol",
+    "Hem-Bal_Sawlog_Vol",
     "Hem-Bal_Pulpwood_Vol",
-    "Cedar_Sawlog_Vol",
     "Cedar_Peelers_Vol",
+    "Cedar_Sawlog_Vol",
     "Cedar_Pulpwood_Vol",
     "Other_Vol",
 ]
 
 BURNED_GRADE_COLUMNS = [
-    "B_SPF_Sawlog_Vol",
     "B_SPF_Peelers_Vol",
+    "B_SPF_Sawlog_Vol",
     "B_SPF_Pulpwood_Vol",
-    "B_Df-Larch_Sawlog_Vol",
     "B_Df-Larch_Peelers_Vol",
+    "B_Df-Larch_Sawlog_Vol",
     "B_Df-Larch_Pulpwood_Vol",
-    "B_Hem-Bal_Sawlog_Vol",
     "B_Hem-Bal_Peelers_Vol",
+    "B_Hem-Bal_Sawlog_Vol",
     "B_Hem-Bal_Pulpwood_Vol",
-    "B_Cedar_Sawlog_Vol",
     "B_Cedar_Peelers_Vol",
+    "B_Cedar_Sawlog_Vol",
     "B_Cedar_Pulpwood_Vol",
     "B_Other_Vol",
 ]

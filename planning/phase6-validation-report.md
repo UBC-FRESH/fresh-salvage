@@ -158,9 +158,10 @@ through a config-visible `Economics` surface (ingestion scenario section,
 principal/agent config sections, flat RHRunConfig fields as ensemble axes).
 The per-parameter old/new values, rationale, and sources are in
 `planning/economics-calibration.md`; the headline changes are green prices
-to the Q4-2023 BC Interior log market level (SPF 127/146/55), harvest costs
-45 (green) / 61 (burned), NEW transport costs 30 (green) / 41 (burned),
-stumpage 15 (green) / 0.25 (burned, BC tabular fire-damaged floor).
+to the Q4-2023 BC Interior log market level (SPF 146/127/55 peel/saw/pulp),
+harvest costs 45 (green) / 61 (burned), NEW transport costs 30 (green) /
+41 (burned), stumpage 15 (green) / 0.25 (burned, BC tabular fire-damaged
+floor).
 
 Margin decomposition (pinned by tests):
 
@@ -263,11 +264,12 @@ actually operates in (`planning/economics-calibration.md`):
 - `BURNED_GRADE_TRANSITION`: year-1 sawlog retention 0.40 -> 0.80 for every
   species group (Plank 1984; Loeffler & Anderson 2018 red-stage evidence:
   sawlog share 85% -> 73% over years 1–2, lumber value −10%; checking loss
-  is already in the 0.65 price discount). Sawlog -> {Saw 0.80, Peel 0.10,
-  Pulp 0.10} — SUPERSEDED 2026-08-13: the Peel 0.10 share was a physically
-  impossible upgrade (erratum below); current row {Saw 0.80, Peel 0.00,
-  Pulp 0.20}; Peeler -> {Peel 0.55, Saw 0.35, Pulp 0.10}; Pulpwood stays
-  Pulpwood 1.0. The grey-stage collapse stays in the decay term.
+  is already in the 0.65 price discount). Peeler -> {Peel 0.55, Saw 0.35,
+  Pulp 0.10}; Sawlog -> {Peel 0.10, Saw 0.80, Pulp 0.10} — SUPERSEDED
+  2026-08-13: the Peel 0.10 share was a physically impossible upgrade
+  (erratum below); current Sawlog row {Peel 0.00, Saw 0.80, Pulp 0.20};
+  Pulpwood stays Pulpwood 1.0. The grey-stage collapse stays in the decay
+  term.
 - Burned cost premium +35% -> +25% (mild, recently-killed case):
   `BURNED_HARVEST_COST` 61 -> 56, `BURNED_TRANSPORT_COST_PER_M3` 41 -> 38.
 - Green prices/costs/stumpage unchanged.
@@ -414,13 +416,13 @@ default 3 $/m3 policy still produces zero salvage.
 ## Grade-transition monotonicity erratum (2026-08-13, supersedes the ≈19.1–19.4 $/m3 flip)
 
 Review caught a modeling error in `BURNED_GRADE_TRANSITION`
-(`src/fresh_salvage/data.py`): the Sawlog row was {Saw 0.80, Peel 0.10,
+(`src/fresh_salvage/data.py`): the Sawlog row was {Peel 0.10, Saw 0.80,
 Pulp 0.10}, and the 0.10 Sawlog -> Peeler share is a physically impossible
 UPGRADE — the grade hierarchy is Peel > Saw > Pulp and fire can only
 DEGRADE grade. The share was a synthesis error introduced in the
-2026-08-12 prompt-salvage adjustment. The Peeler row {Saw 0.35, Peel 0.55,
+2026-08-12 prompt-salvage adjustment. The Peeler row {Peel 0.55, Saw 0.35,
 Pulp 0.10} is directionally fine (downgrades only) and is unchanged, as is
-Pulpwood {Pulp 1.0}. Fix: the Sawlog row is now {Saw 0.80, Peel 0.00,
+Pulpwood {Pulp 1.0}. Fix: the Sawlog row is now {Peel 0.00, Saw 0.80,
 Pulp 0.20} — the ~20% of burned sawlog volume that does not hold sawlog
 grade drops straight to pulpwood. Every row remains downgrade-only and
 sums to 1.0, so burned volume stays conserved.
@@ -436,13 +438,13 @@ salvage =  82.55 − 56 − 38 − 0.25  = −11.70 $/m3   (sawlog basis)
 salvage =  73.19 − 56 − 38 − 0.25  = −21.06 $/m3   (transition mix)
 ```
 
-The transition mix is now 0.65 x (0.80 x 127 + 0.00 x 146 + 0.20 x 55) =
+The transition mix is now 0.65 x (0.00 x 146 + 0.80 x 127 + 0.20 x 55) =
 73.19 $/m3 (was 79.105 with the upgrade share). The SPF development-type
-mix (grade split 0.805/0.092/0.103 through the full matrix) gives
-destination shares saw 0.6762 (unchanged — the fix moves sawlog-destined
-volume between peel and pulp, never into or out of saw), peel 0.0506 (was
-0.1311), pulp 0.2732 (was 0.1927); price 0.65 x (0.6762 x 127 +
-0.0506 x 146 + 0.2732 x 55) = 70.39 $/m3, margin −23.86 $/m3 (was −19.10).
+mix (grade split 0.092/0.805/0.103 peel/saw/pulp through the full matrix)
+gives destination shares peel 0.0506 (was 0.1311), saw 0.6762 (unchanged —
+the fix moves sawlog-destined volume between peel and pulp, never into or
+out of saw), pulp 0.2732 (was 0.1927); price 0.65 x (0.0506 x 146 +
+0.6762 x 127 + 0.2732 x 55) = 70.39 $/m3, margin −23.86 $/m3 (was −19.10).
 
 Stands-table DT economics after re-ingestion (burned costs 94.25 $/m3;
 the table now lists all 13 DTs carrying burned volume — SPF_CWH at 16.3 m3
@@ -582,8 +584,8 @@ re-run under the fixed constants gives salvage 0.00 and green
   margin decomposition (green +37 on the SPF sawlog basis; salvage margins
   at subsidy 0 of −11.70 sawlog basis, −21.06 transition mix, −23.86
   development-type mix), prompt-salvage grade-transition math
-  (200 x 0.30 x (0.805 x 0.80 + 0.092 x 0.35) = 40.572 sawlog destination,
-  200 x 0.30 x (0.805 x 0.00 + 0.092 x 0.55) = 3.036 peeler destination)
+  (200 x 0.30 x (0.092 x 0.55 + 0.805 x 0.00) = 3.036 peeler destination,
+  200 x 0.30 x (0.092 x 0.35 + 0.805 x 0.80) = 40.572 sawlog destination)
   plus explicit downgrade-only and row-sum-1.0 guards on
   `BURNED_GRADE_TRANSITION`, agent behavior at
   subsidy 0 (no salvage) vs 25 (full influx salvage), economics scenario

@@ -76,14 +76,14 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
     - transition mix (the expected realized price of a green sawlog after
       burn degradation through ``BURNED_GRADE_TRANSITION``; the transition
       is downgrade-only — the burned sawlog remainder drops to pulp, never
-      up to peel): 0.65 x (0.80 x 127 + 0.00 x 146 + 0.20 x 55) = 73.19
+      up to peel): 0.65 x (0.00 x 146 + 0.80 x 127 + 0.20 x 55) = 73.19
       $/m3, margin 73.19 - 56 - 38 - 0.25 = -21.06 $/m3 — the headline
       ~-21 $/m3 prompt-salvage basis;
     - development-type mix (the agent LP's actual cohort price: the SPF
       grade split pushed through the full transition matrix): destination
-      shares saw 0.805 x 0.80 + 0.092 x 0.35 = 0.6762, peel
-      0.805 x 0.00 + 0.092 x 0.55 = 0.0506, pulp 0.805 x 0.20 + 0.092 x 0.10
-      + 0.103 = 0.2732, price 0.65 x (0.6762 x 127 + 0.0506 x 146
+      shares peel 0.092 x 0.55 + 0.805 x 0.00 = 0.0506, saw
+      0.092 x 0.35 + 0.805 x 0.80 = 0.6762, pulp 0.103 + 0.092 x 0.10
+      + 0.805 x 0.20 = 0.2732, price 0.65 x (0.0506 x 146 + 0.6762 x 127
       + 0.2732 x 55) = 70.39 $/m3, margin -23.86 $/m3.
 
     Fire-killed wood is a net cost to recover without the subsidy on every
@@ -116,8 +116,8 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
     # degradation (the ~-21 $/m3 prompt-salvage headline).
     transition = data.BURNED_GRADE_TRANSITION["Sawlog"]
     transition_price = data.BURNED_PRICE_DISCOUNT * (
-        transition["Sawlog"] * data.GREEN_PRICES["SPF_Sawlog"]
-        + transition["Peeler"] * data.GREEN_PRICES["SPF_Peelers"]
+        transition["Peeler"] * data.GREEN_PRICES["SPF_Peelers"]
+        + transition["Sawlog"] * data.GREEN_PRICES["SPF_Sawlog"]
         + transition["Pulpwood"] * data.GREEN_PRICES["SPF_Pulpwood"]
     )
     assert transition_price == pytest.approx(73.19)
@@ -131,10 +131,10 @@ def test_calibrated_margin_decomposition_spf_basis() -> None:
             splits[grade_in] * data.BURNED_GRADE_TRANSITION[grade_in][grade_out]
             for grade_in in splits
         )
-        for grade_out in ("Sawlog", "Peeler", "Pulpwood")
+        for grade_out in ("Peeler", "Sawlog", "Pulpwood")
     }
-    assert destination_share["Sawlog"] == pytest.approx(0.6762)
     assert destination_share["Peeler"] == pytest.approx(0.0506)
+    assert destination_share["Sawlog"] == pytest.approx(0.6762)
     assert destination_share["Pulpwood"] == pytest.approx(0.2732)
     dt_price = data.BURNED_PRICE_DISCOUNT * sum(
         destination_share[grade_out]
@@ -540,8 +540,8 @@ def _write_toy_run_config(tmp_path, *, offers_path=None):
                 "Total_Green_Vol": 1_000.0,
                 "Total_Burned_Vol": 200.0,
                 **{column: 0.0 for column in data.GRADE_COLUMNS},
-                "SPF_Sawlog_Vol": 805.0,
                 "SPF_Peelers_Vol": 92.0,
+                "SPF_Sawlog_Vol": 805.0,
                 "SPF_Pulpwood_Vol": 103.0,
                 **{column: 0.0 for column in data.BURNED_GRADE_COLUMNS},
                 "B_SPF_Sawlog_Vol": 200.0,

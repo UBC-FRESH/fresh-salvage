@@ -6,7 +6,7 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 ## Unreleased
 
 - Grade-transition monotonicity fix: `BURNED_GRADE_TRANSITION` Sawlog row
-  corrected from {Saw 0.80, Peel 0.10, Pulp 0.10} to {Saw 0.80, Peel 0.00,
+  corrected from {Peel 0.10, Saw 0.80, Pulp 0.10} to {Peel 0.00, Saw 0.80,
   Pulp 0.20} — the 0.10 Sawlog->Peeler share was a physically impossible
   upgrade (grade hierarchy Peel > Saw > Pulp; fire can only degrade
   grade), caught in review. Rows remain downgrade-only and sum to 1.0, so
