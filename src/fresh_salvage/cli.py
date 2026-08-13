@@ -221,13 +221,23 @@ def ensemble_run(
         bool,
         typer.Option("--json", help="Emit deterministic JSON output."),
     ] = False,
+    strict: Annotated[
+        bool,
+        typer.Option(
+            "--strict",
+            help="Exit 1 when any scenario fails (ensemble status partial or "
+            "failed); without it, completed ensembles always exit 0.",
+        ),
+    ] = False,
 ) -> None:
     """Run a scenario ensemble of rolling-horizon runs in parallel.
 
     A failed scenario is recorded (status ``failed`` plus the structured
-    error code) and never aborts the ensemble; the command itself exits
-    non-zero only on fatal grid/input/bridge failures before or around the
-    scenario runs.
+    error code) and never aborts the ensemble. By default the command exits
+    0 for every completed ensemble (status ``ok``/``partial``/``failed``);
+    with ``--strict`` it exits 1 unless the status is ``ok``. Either way the
+    command exits 1 on fatal grid/input/bridge failures before or around
+    the scenario runs.
     """
     try:
         config = EnsembleConfig.read(config_path)
@@ -245,6 +255,8 @@ def ensemble_run(
         _print_failure(diagnostic, json_output, command="ensemble-run")
         raise typer.Exit(code=1)
     _print_ensemble_summary(result, json_output)
+    if strict and result.status != "ok":
+        raise typer.Exit(code=1)
 
 
 @app.command()

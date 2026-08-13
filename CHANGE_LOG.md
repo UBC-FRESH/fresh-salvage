@@ -3,6 +3,14 @@
 This is the project narrative for `fresh-salvage`. Newest entries first
 (reverse-chronological). Commit references are short hashes on `main`.
 
+## Unreleased
+
+- `ensemble-run --strict`: a completed ensemble now exits 1 when any
+  scenario failed (status `partial` or `failed`); without the flag,
+  completed ensembles still exit 0. Fatal grid/input/bridge failures exit 1
+  in both modes, and the `--json` payload shape is unchanged — the flag
+  gates the exit code only.
+
 ## 2026-08-12 — Phase 6: validation, economic recalibration
 
 - Fixed FS-VAL-01/02 (`82688b6`): the burn-severity ladder became a

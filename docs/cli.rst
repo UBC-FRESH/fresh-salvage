@@ -23,7 +23,7 @@ execution logs. File names are slugged from the ``run_id`` (or
 parse, solver non-optimality, or a structured pipeline error — exits 1 with
 a diagnostic. ``ensemble-run`` is the exception in detail: per-scenario
 failures are recorded, not raised, so a partially failed ensemble still
-exits 0 (see `ensemble-run`_).
+exits 0 unless ``--strict`` is passed (see `ensemble-run`_).
 
 **``--json`` shapes.** On success the payload is
 ``{"ok": true, "command": <name>, ...summary fields...}`` where the summary
@@ -395,7 +395,7 @@ Run a scenario ensemble of rolling-horizon runs in parallel.
 
 .. code-block:: bash
 
-   fresh-salvage ensemble-run examples/ensemble_tsa29.yaml [--json]
+   fresh-salvage ensemble-run examples/ensemble_tsa29.yaml [--json] [--strict]
 
 Config (``EnsembleConfig``):
 
@@ -441,6 +441,12 @@ fatal grid, input, or bridge failures before or around the scenario runs
 ``ensemble_duplicate_scenario``, ``ensemble_field_reserved``,
 ``ensemble_scenario_invalid``, ``ensemble_input_missing``,
 ``ensemble_bridge_failed``).
+
+**``--strict`` exit-code gate.** With ``--strict`` a completed ensemble
+exits 0 only when the status is ``ok``; ``partial`` or ``failed`` exits 1.
+Without the flag, every completed ensemble exits 0 regardless of scenario
+failures. Fatal grid/input/bridge failures exit 1 in both modes, and the
+``--json`` payload shape is unchanged — the flag gates the exit code only.
 
 Artifacts: ``data/<ensemble>-scenarios.jsonl`` (one record per scenario in
 deterministic grid order — name, overrides, status, error code, wall

@@ -105,8 +105,10 @@ the remaining scenarios and reports:
 - ``partial`` — at least one failed, at least one succeeded;
 - ``failed`` — every scenario failed.
 
-All three exit 0: per-scenario failure is data, not a crash. The command
-exits non-zero only on fatal grid, input, or bridge failures (a missing
+All three exit 0: per-scenario failure is data, not a crash — unless
+``--strict`` is passed, in which case ``partial`` and ``failed`` exit 1 and
+only ``ok`` exits 0. Either way the command
+exits non-zero on fatal grid, input, or bridge failures (a missing
 stands/yields input is detected during provenance checks **before** the
 bridge prebuild, so it fails cheap). Each successful scenario flushes its
 own RH step JSONL and manifest incrementally inside its own output root, so

@@ -15,6 +15,7 @@ from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import pytest
+from click.testing import Result
 from typer.testing import CliRunner
 
 from fresh_salvage import ensemble, rh
@@ -439,20 +440,22 @@ def test_ensemble_config_yaml_roundtrip(tmp_path: Path) -> None:
 # --- CLI wiring ----------------------------------------------------------------
 
 
-def _stub_ensemble_result(tmp_path: Path) -> EnsembleResult:
+def _stub_ensemble_result(tmp_path: Path, status: str = "ok") -> EnsembleResult:
+    failed = status != "ok"
     return EnsembleResult(
         ensemble_id="test-ensemble",
-        status="ok",
+        status=status,
         scenario_count=1,
-        succeeded=1,
-        failed=0,
+        succeeded=0 if failed else 1,
+        failed=1 if failed else 0,
         max_workers=1,
         wall_seconds=0.5,
         scenarios=[
             ScenarioRecord(
                 name="baseline",
                 run_id="test-ensemble-baseline",
-                status="optimal",
+                status="failed" if failed else "optimal",
+                error_code="rh_state_duplicate_cohort" if failed else None,
                 wall_seconds=0.5,
                 output_root=tmp_path / "ensemble" / "baseline",
             )
@@ -503,6 +506,69 @@ def test_cli_ensemble_run_grid_error_exit_code(tmp_path: Path) -> None:
     assert payload["ok"] is False
     assert payload["command"] == "ensemble-run"
     assert payload["code"] == "ensemble_axis_unknown"
+
+
+def _invoke_strict_ensemble(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    *extra_args: str,
+) -> Result:
+    """Drive ``ensemble-run`` with a stubbed driver returning ``status``."""
+
+    config_path = tmp_path / "ensemble.yaml"
+    _config(tmp_path, {"subsidy_rate_per_m3": [3.0]}).write_json(config_path)
+    monkeypatch.setattr(
+        "fresh_salvage.cli.ensemble.run_ensemble",
+        lambda config, verbose=False: _stub_ensemble_result(tmp_path, status),
+    )
+    return runner.invoke(app, ["ensemble-run", str(config_path), *extra_args])
+
+
+def test_cli_ensemble_run_strict_ok_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke_strict_ensemble(tmp_path, monkeypatch, "ok", "--strict")
+
+    assert result.exit_code == 0
+
+
+def test_cli_ensemble_run_strict_partial_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke_strict_ensemble(tmp_path, monkeypatch, "partial", "--strict")
+
+    assert result.exit_code == 1
+
+
+def test_cli_ensemble_run_strict_failed_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke_strict_ensemble(tmp_path, monkeypatch, "failed", "--strict")
+
+    assert result.exit_code == 1
+
+
+def test_cli_ensemble_run_partial_default_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke_strict_ensemble(tmp_path, monkeypatch, "partial")
+
+    assert result.exit_code == 0
+
+
+def test_cli_ensemble_run_strict_json_exits_one_with_unchanged_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _invoke_strict_ensemble(
+        tmp_path, monkeypatch, "partial", "--strict", "--json"
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["command"] == "ensemble-run"
+    assert payload["status"] == "partial"
 
 
 # --- real 2-scenario end-to-end (opt-in integration) --------------------------
