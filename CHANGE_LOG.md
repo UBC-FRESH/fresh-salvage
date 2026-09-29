@@ -5,6 +5,23 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Added `planning/first-best-hidden-information.md`, which defines a
+  first-best benchmark and hidden-information experiment design for measuring
+  moral-hazard and information losses against the current principal-agent
+  pipeline.
+- ``sensitivity-run`` can now optionally perform an independent adaptive
+  subsidy flip-point search for each non-subsidy sensitivity setting and add
+  the resulting brackets to its Markdown report and CSV evidence. The TSA29
+  sensitivity example enables this analysis; ``docs/sensitivity_report.rst``
+  documents the report structure and evidence files. Expected unbracketed
+  endpoint outcomes (such as the fire-free control) are reported as
+  ``not_bracketed`` rather than aborting the full sensitivity analysis.
+- Added the TSA29 burned-salvage operation-cost sensitivity: calibrated
+  ``burned_harvest_cost`` (56 $/m3) plus 20% and 40% increases, with their
+  corresponding subsidy flip-point brackets.
+- Added ``docs/flip_point_search.rst``, a standalone explanation of the
+  adaptive subsidy flip-point algorithm, input prerequisites, command, and
+  result interpretation.
 - Grade-transition monotonicity fix: `BURNED_GRADE_TRANSITION` Sawlog row
   corrected from {Peel 0.10, Saw 0.80, Pulp 0.10} to {Peel 0.00, Saw 0.80,
   Pulp 0.20} — the 0.10 Sawlog->Peeler share was a physically impossible

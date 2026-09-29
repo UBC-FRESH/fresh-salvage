@@ -1,21 +1,18 @@
-# Example subsidy flip-point sweep for the full TSA29 (post-calibration).
+# Example adaptive subsidy flip-point search for the full TSA29.
 #
-# Reproduces the prescribed 26-scenario sweep recorded in
-# planning/phase6-validation-report.md: subsidy_rate_per_m3 in
-# {0, 5, 8, 10, 12, 14, 15, 16, 18, 20, 22, 25, 30} crossed with
-# burn_rate_multiplier in {0.0, 1.0} (the fire-free control). Each scenario
-# is a full rolling-horizon run (10 steps x 10 implemented years, 15-period
-# WS3 re-solves). Per-scenario WS3 workers 1 (the WS3 build is serial-bound;
-# spend cores on max_workers instead); max_workers 64 runs the whole grid in
-# ~2.5 minutes on a 64-core host. Hold `workers` fixed across the grid: WS3
-# step objectives shift slightly with worker count (±0.014%).
+# The search checks the inactive and active endpoints, then runs sequential
+# midpoint probes to find the lowest subsidy producing positive burned salvage.
+# It stops as soon as the inactive/active subsidy bracket is at most $0.50/m3,
+# or after eight midpoint probes as a safety cap. Each probe is a full
+# rolling-horizon run. Binary search is necessarily sequential, so max_workers
+# must remain 1. Hold `workers` fixed:
+# WS3 step objectives shift slightly with worker count (±0.014%).
 #
-#   fresh-salvage ensemble-run examples/ensemble_flip_sweep.yaml --json
+#   fresh-salvage ensemble-run examples/ensemble_flip_sweep.yaml --json --strict
 #
-# Optional fine probe that resolves the turn-on (append a second axes
-# block run or edit in place), e.g. around the post-erratum window:
-#   subsidy_rate_per_m3: [23.8, 23.85, 23.9, 24.0, 24.05, 24.1]
-#   burn_rate_multiplier: [1.0]
+# The final bracket is recorded in the ensemble JSON and manifest. The
+# fire-active case is held fixed below; use a separate config for the burn-rate
+# control.
 #
 # The paths below are machine-relative outputs of the earlier phases plus the
 # external validated FEMIC TSA29 package. They are never vendored in this
@@ -23,8 +20,8 @@
 ensemble_id: tsa29-ensemble-flip-sweep
 base:
   stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
-  yields_path: /srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/femic-tsa29-instance/output/woodstock_tsa29_validated/woodstock_yields.csv
-  bridge_path: /srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/femic-tsa29-instance/output/woodstock_tsa29_validated/ws3_bridge
+  yields_path: /home/xuyunhao/projects/salvage_harvesting_model/femic-tsa29-instance/output/woodstock_tsa29_validated/woodstock_yields.csv
+  bridge_path: /home/xuyunhao/projects/salvage_harvesting_model/femic-tsa29-instance/output/woodstock_tsa29_validated/ws3_bridge
   base_year: 2025
   horizon: 15
   period_length: 10
@@ -43,17 +40,17 @@ base:
   decay_rate: 0.85
   discount_rate: 0.03
   burned_limit_annual_m3: null
-axes:
-  # Principal policy instrument ($ per m3 of burned volume salvaged). The
-  # calibrated SPF development-type breakevens sit at 23.85-24.07 $/m3, so
-  # the response is a ramp across ~23.9-24.1 and saturates at the physical
-  # maximum 1,338,477.16 m3; the FESBC 14-15 $/m3 benchmark sits well below
-  # the turn-on.
-  subsidy_rate_per_m3: [0.0, 5.0, 8.0, 10.0, 12.0, 14.0, 15.0, 16.0, 18.0, 20.0, 22.0, 25.0, 30.0]
-  # Future fire-pattern axis; 0.0 is the fire-free control (salvage exactly
-  # zero at every subsidy — a nonzero value there indicates a wiring defect).
-  burn_rate_multiplier: [0.0, 1.0]
-max_workers: 64
+binary_search:
+  axis: subsidy_rate_per_m3
+  lower: 20.0
+  upper: 30.0
+  iterations: 8
+  tolerance: 0.1
+  threshold: 0.0
+  metric: total_burned_harvest_m3
+  fixed:
+    burn_rate_multiplier: 1.0
+max_workers: 1
 output_root: outputs/ensemble_flip_sweep
 metadata:
-  description: 26-scenario subsidy flip-point sweep (13 subsidy levels x 2 fire multipliers), 100-year rolling-horizon runs.
+  description: Adaptive binary search for the subsidy at which burned salvage becomes positive; 100-year rolling-horizon probes.
