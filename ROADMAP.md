@@ -15,6 +15,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P4 Agent-side linear HiGHS LP and annual fire simulation | TBD | `feature/p4-agent-fire` | Complete |
 | P5 Rolling-horizon coordination loop and ensemble driver | TBD | `feature/p5-rolling-horizon` | Complete |
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
+| P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -202,10 +203,38 @@ economic surface against BC anchors, and ship the documentation suite.
 - [ ] P6.2 Documentation suite and release notes (README, Sphinx guides,
       `CHANGE_LOG.md`, this roadmap, `RELEASE_NOTES.md`, version 0.1.0a1).
 
+## Phase 7: Sensitivity Analysis And Subsidy Flip-Point Search
+
+Parent issue: #3
+
+Branch: `version1.1(SensivityAnalysis&BinaryFlippingPoint)`
+
+Status: active
+
+Goal: add one-at-a-time sensitivity experiments, adaptive subsidy flip-point
+search, typed evidence artifacts, and thesis-oriented documentation to the
+rolling-horizon pipeline.
+
+- [ ] P7.1 Sensitivity framework and typed evidence (#5).
+  - [ ] Add typed sensitivity and evidence records (#6).
+  - [ ] Implement one-at-a-time sensitivity execution (#7).
+  - [ ] Add sensitivity framework regression tests (#8).
+- [ ] P7.2 Adaptive subsidy flip-point search and runtime integration (#9).
+  - [ ] Implement sequential binary flip-point search (#10).
+  - [ ] Preserve WS3 and femic imports across workers (#11).
+  - [ ] Add flip-point integration and failure tests (#12).
+- [ ] P7.3 Documentation, examples, and validation closeout (#13).
+  - [ ] Document sensitivity and flip-point workflows (#14).
+  - [ ] Add public-safe examples and thesis results plan (#15).
+  - [ ] Complete verification and phase closeout (#16).
+
+Evidence commits: `5582def`, `4007489`, `4114bd5`.
+
 ## Current Next Steps
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
-closes Phase 6. Beyond that:
+is tracked separately from the active P7 branch. P7 records the sensitivity
+and flip-point extension work. Beyond these active closeout tasks:
 
 - **Full-BC scale-up.** Port the pipeline from the single-TSA (TSA29) study
   area to additional TSAs toward a full-BC salvage-subsidy analysis, in

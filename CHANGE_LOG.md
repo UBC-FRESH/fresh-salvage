@@ -5,6 +5,9 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Created GitHub Phase 7 issue #3 and linked child issues #5-#16 for the
+  sensitivity-analysis and adaptive subsidy flip-point work on branch
+  `version1.1(SensivityAnalysis&BinaryFlippingPoint)`.
 - Added `planning/first-best-hidden-information.md`, which defines a
   first-best benchmark and hidden-information experiment design for measuring
   moral-hazard and information losses against the current principal-agent
