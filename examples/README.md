@@ -13,10 +13,10 @@ templates — one per CLI command, plus the flip-point sweep ensemble:
   (`fresh-salvage rh-run`).
 - `ensemble_tsa29.yaml` — 4-scenario smoke ensemble grid
   (`fresh-salvage ensemble-run`).
-- `ensemble_flip_sweep.yaml` — 26-scenario subsidy flip-point sweep
-  (13 subsidy levels x 2 fire multipliers), reproducing the prescribed
-  post-calibration sweep of `planning/phase6-validation-report.md`; see
-  `docs/ensembles.rst` for how to read the response curve.
+- `ensemble_flip_sweep.yaml` — adaptive binary search for the fire-active
+  subsidy flip; see `docs/ensembles.rst` for the search semantics.
+- `sensitivity_tsa29.yaml` — one-at-a-time sensitivity sweeps across policy,
+  fire, and economic parameters (`fresh-salvage sensitivity-run`).
 
 The configs point at machine-specific input paths (the WL_VFSL polygon
 layer, the validated femic TSA29 WS3 bridge, and the run outputs of earlier

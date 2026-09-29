@@ -13,11 +13,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+import pandas as pd
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 MANIFEST_VERSION = "1.0"
 
-ARTIFACT_DIRECTORIES = ("data", "manifests", "logs")
+ARTIFACT_DIRECTORIES = ("data", "manifests", "logs", "reports")
 
 
 class Diagnostic(BaseModel):
@@ -103,16 +104,12 @@ class SeverityMapping(BaseModel):
         colliding = sorted(set(self.severity_aliases) & set(self.severity_to_burned_frac))
         if colliding:
             raise ValueError(
-                "severity alias sources must not also be ladder labels: "
-                + ", ".join(colliding)
+                "severity alias sources must not also be ladder labels: " + ", ".join(colliding)
             )
-        dangling = sorted(
-            set(self.severity_aliases.values()) - set(self.severity_to_burned_frac)
-        )
+        dangling = sorted(set(self.severity_aliases.values()) - set(self.severity_to_burned_frac))
         if dangling:
             raise ValueError(
-                "severity aliases target labels missing from the ladder: "
-                + ", ".join(dangling)
+                "severity aliases target labels missing from the ladder: " + ", ".join(dangling)
             )
         return self
 
@@ -172,9 +169,7 @@ class Economics(BaseModel):
 
     green_prices: dict[str, float] = Field(default_factory=_default_green_prices)
     burned_price_discount: float = Field(
-        default_factory=lambda: float(
-            _default_economics_field("BURNED_PRICE_DISCOUNT")
-        )
+        default_factory=lambda: float(_default_economics_field("BURNED_PRICE_DISCOUNT"))
     )
     green_harvest_cost: float = Field(
         default_factory=lambda: float(_default_economics_field("GREEN_HARVEST_COST"))
@@ -186,9 +181,7 @@ class Economics(BaseModel):
         default_factory=lambda: float(_default_economics_field("TRANSPORT_COST_PER_M3"))
     )
     burned_transport_cost_per_m3: float = Field(
-        default_factory=lambda: float(
-            _default_economics_field("BURNED_TRANSPORT_COST_PER_M3")
-        )
+        default_factory=lambda: float(_default_economics_field("BURNED_TRANSPORT_COST_PER_M3"))
     )
     green_stumpage_rate: float = Field(
         default_factory=lambda: float(_default_economics_field("GREEN_STUMPAGE_RATE"))
@@ -230,10 +223,7 @@ class Economics(BaseModel):
     def burned_prices(self) -> dict[str, float]:
         """Return the derived burned price table (green x discount)."""
 
-        return {
-            key: value * self.burned_price_discount
-            for key, value in self.green_prices.items()
-        }
+        return {key: value * self.burned_price_discount for key, value in self.green_prices.items()}
 
 
 class ScenarioRunConfig(BaseModel):
@@ -296,6 +286,12 @@ class ArtifactLayout(BaseModel):
 
         return self.output_root / "logs"
 
+    @property
+    def reports_dir(self) -> Path:
+        """Human-readable result-document directory."""
+
+        return self.output_root / "reports"
+
     def initialize(self) -> ArtifactLayout:
         """Create the standard artifact directories."""
 
@@ -310,6 +306,7 @@ class ArtifactLayout(BaseModel):
             "data": self.data_dir,
             "manifests": self.manifests_dir,
             "logs": self.logs_dir,
+            "reports": self.reports_dir,
         }
 
     def data_path(self, name: str, *, ext: str = "parquet") -> Path:
@@ -326,6 +323,11 @@ class ArtifactLayout(BaseModel):
         """Return a stable log path."""
 
         return self.logs_dir / f"{safe_slug(name)}.{ext}"
+
+    def report_path(self, name: str, *, ext: str = "md") -> Path:
+        """Return a stable human-readable report path."""
+
+        return self.reports_dir / f"{safe_slug(name)}.{ext}"
 
 
 class Stand(BaseModel):
@@ -921,9 +923,7 @@ class IngestResult(BaseModel):
             "burned_volume": round(self.burned_volume, 2),
             "green_volume": round(self.green_volume, 2),
             "per_bec_zone_counts": dict(sorted(self.per_bec_zone_counts.items())),
-            "per_development_type_counts": dict(
-                sorted(self.per_development_type_counts.items())
-            ),
+            "per_development_type_counts": dict(sorted(self.per_development_type_counts.items())),
             "diagnostics": [diagnostic.model_dump() for diagnostic in self.diagnostics],
             "duration_seconds": round(self.duration_seconds, 3),
         }
@@ -963,8 +963,7 @@ class WS3Result(BaseModel):
                 for period, volume in sorted(self.per_period_volumes_m3.items())
             },
             "per_period_area_ha": {
-                period: round(area, 2)
-                for period, area in sorted(self.per_period_area_ha.items())
+                period: round(area, 2) for period, area in sorted(self.per_period_area_ha.items())
             },
             "artifacts": {
                 "data": str(self.data_path),
@@ -1038,9 +1037,7 @@ class RHRunConfig(BaseModel):
     subsidy_rate_per_m3: float = Field(default_factory=_default_subsidy_rate_per_m3)
     green_prices: dict[str, float] = Field(default_factory=_default_green_prices)
     burned_price_discount: float = Field(
-        default_factory=lambda: float(
-            _default_economics_field("BURNED_PRICE_DISCOUNT")
-        )
+        default_factory=lambda: float(_default_economics_field("BURNED_PRICE_DISCOUNT"))
     )
     green_harvest_cost: float = Field(
         default_factory=lambda: float(_default_economics_field("GREEN_HARVEST_COST"))
@@ -1052,9 +1049,7 @@ class RHRunConfig(BaseModel):
         default_factory=lambda: float(_default_economics_field("TRANSPORT_COST_PER_M3"))
     )
     burned_transport_cost_per_m3: float = Field(
-        default_factory=lambda: float(
-            _default_economics_field("BURNED_TRANSPORT_COST_PER_M3")
-        )
+        default_factory=lambda: float(_default_economics_field("BURNED_TRANSPORT_COST_PER_M3"))
     )
     green_stumpage_rate: float = Field(
         default_factory=lambda: float(_default_economics_field("GREEN_STUMPAGE_RATE"))
@@ -1062,7 +1057,7 @@ class RHRunConfig(BaseModel):
     burned_stumpage_rate: float = Field(
         default_factory=lambda: float(_default_economics_field("BURNED_STUMPAGE_RATE"))
     )
-    burn_rate_multiplier: float = 1.0
+    burn_rate_multiplier: float = 1
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
 
@@ -1280,9 +1275,7 @@ class RHResult(BaseModel):
             "decadal_burned_harvest_m3": [
                 round(volume, 2) for volume in self.decadal_burned_harvest_m3
             ],
-            "decadal_area_burned_ha": [
-                round(area, 2) for area in self.decadal_area_burned_ha
-            ],
+            "decadal_area_burned_ha": [round(area, 2) for area in self.decadal_area_burned_ha],
             "final_age_distribution_ha": {
                 age: round(area, 2)
                 for age, area in sorted(
@@ -1293,9 +1286,7 @@ class RHResult(BaseModel):
                 {
                     "step": record.step,
                     "ws3_objective_value": round(record.ws3_objective_value, 2),
-                    "principal_objective_value": round(
-                        record.principal_objective_value, 2
-                    ),
+                    "principal_objective_value": round(record.principal_objective_value, 2),
                     "agent_objective_value": round(record.agent_objective_value, 2),
                     "wall_seconds": round(record.wall_seconds, 3),
                 }
@@ -1310,6 +1301,50 @@ class RHResult(BaseModel):
         }
 
 
+class BinarySearchConfig(BaseModel):
+    """Adaptive search for the lowest value where salvage reaches a threshold.
+
+    ``iterations`` is a maximum. When ``tolerance`` is set, the search stops
+    early once the inactive/active bracket is no wider than that value.
+    """
+
+    axis: str = "subsidy_rate_per_m3"
+    lower: float = 0.0
+    upper: float
+    iterations: int = Field(ge=1)
+    tolerance: float | None = Field(default=None, gt=0.0)
+    threshold: float = 0.0
+    metric: Literal["total_burned_harvest_m3"] = "total_burned_harvest_m3"
+    fixed: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("axis")
+    @classmethod
+    def _validate_axis(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("binary_search.axis must not be empty")
+        return text
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> BinarySearchConfig:
+        if self.lower >= self.upper:
+            raise ValueError("binary_search.lower must be less than upper")
+        if self.threshold < 0:
+            raise ValueError("binary_search.threshold cannot be negative")
+        return self
+
+
+class BinarySearchResult(BaseModel):
+    """Final inactive/active bracket from an adaptive binary search."""
+
+    lower: float
+    upper: float
+    bracket_width: float = Field(ge=0.0)
+    midpoint_probes: int = Field(ge=0)
+    tolerance: float | None = None
+    converged: bool
+
+
 class EnsembleConfig(BaseModel):
     """Configuration for one scenario ensemble of rolling-horizon runs.
 
@@ -1321,7 +1356,9 @@ class EnsembleConfig(BaseModel):
     ``output_root`` per scenario, so both are reserved and must not appear
     in ``base`` or ``axes``; ``bridge_path`` is required in ``base`` (the
     bridge source) but reserved as an axis, since every scenario is bound to
-    the once-prebuilt shared bridge. Grid-shape violations raise
+    the once-prebuilt shared bridge. Alternatively, ``binary_search`` runs an
+    adaptive sequential search over one numeric ``RHRunConfig`` field and is
+    mutually exclusive with ``axes``. Grid-shape violations raise
     :class:`fresh_salvage.ensemble.EnsembleError` with a structured code at
     expansion time.
     """
@@ -1329,6 +1366,7 @@ class EnsembleConfig(BaseModel):
     ensemble_id: str = "tsa29-ensemble"
     base: dict[str, object] = Field(default_factory=dict)
     axes: dict[str, list[object]] = Field(default_factory=dict)
+    binary_search: BinarySearchConfig | None = None
     max_workers: int = 4
     output_root: Path
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -1347,6 +1385,12 @@ class EnsembleConfig(BaseModel):
         if value <= 0:
             raise ValueError("max_workers must be positive")
         return value
+
+    @model_validator(mode="after")
+    def _validate_search_mode(self) -> EnsembleConfig:
+        if self.binary_search is not None and self.axes:
+            raise ValueError("axes and binary_search are mutually exclusive")
+        return self
 
     def write_json(self, path: Path) -> Path:
         """Write this config as formatted JSON."""
@@ -1383,6 +1427,7 @@ class ScenarioRecord(BaseModel):
     error_message: str | None = None
     wall_seconds: float = Field(ge=0.0)
     output_root: Path
+    metric_value: float | None = None
     manifest_path: Path | None = None
     steps_path: Path | None = None
 
@@ -1402,6 +1447,7 @@ class EnsembleManifest(BaseModel):
     wall_seconds: float = Field(ge=0.0)
     source_sha256: dict[str, str] = Field(default_factory=dict)
     scenarios: list[ScenarioRecord] = Field(default_factory=list)
+    binary_search_result: BinarySearchResult | None = None
     config: dict[str, object] = Field(default_factory=dict)
     diagnostics: list[Diagnostic] = Field(default_factory=list)
 
@@ -1431,6 +1477,7 @@ class EnsembleResult(BaseModel):
     max_workers: int = Field(ge=1)
     wall_seconds: float = Field(ge=0.0)
     scenarios: list[ScenarioRecord] = Field(default_factory=list)
+    binary_search_result: BinarySearchResult | None = None
     scenarios_path: Path | None = None
     manifest_path: Path | None = None
     diagnostics: list[Diagnostic] = Field(default_factory=list)
@@ -1446,6 +1493,11 @@ class EnsembleResult(BaseModel):
             "failed": self.failed,
             "max_workers": self.max_workers,
             "wall_seconds": round(self.wall_seconds, 3),
+            "binary_search_result": (
+                self.binary_search_result.model_dump()
+                if self.binary_search_result is not None
+                else None
+            ),
             "scenarios": [
                 {
                     "name": record.name,
@@ -1462,6 +1514,253 @@ class EnsembleResult(BaseModel):
             },
             "diagnostics": [diagnostic.model_dump() for diagnostic in self.diagnostics],
         }
+
+
+class SensitivityConfig(BaseModel):
+    """Configuration for one-at-a-time rolling-horizon sensitivity analysis.
+
+    ``parameters`` maps RHRunConfig field names to the values to test. The
+    sensitivity driver adds the baseline value for each parameter when it is
+    absent, so every parameter has a directly comparable control run.
+    """
+
+    sensitivity_id: str = "tsa29-sensitivity"
+    base: dict[str, object] = Field(default_factory=dict)
+    parameters: dict[str, list[object]] = Field(default_factory=dict)
+    flip_point_search: BinarySearchConfig | None = None
+    max_workers: int = 1
+    output_root: Path
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("sensitivity_id")
+    @classmethod
+    def _validate_sensitivity_id(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("sensitivity_id must not be empty")
+        return text
+
+    @field_validator("max_workers")
+    @classmethod
+    def _validate_max_workers(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("max_workers must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_flip_point_search(self) -> SensitivityConfig:
+        if (
+            self.flip_point_search is not None
+            and self.flip_point_search.axis != "subsidy_rate_per_m3"
+        ):
+            raise ValueError("flip_point_search.axis must be subsidy_rate_per_m3")
+        return self
+
+    def write_json(self, path: Path) -> Path:
+        """Write this config as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    @classmethod
+    def read(cls, path: Path) -> SensitivityConfig:
+        """Read a sensitivity config from JSON or YAML."""
+
+        path = Path(path)
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return cls.model_validate(_load_yaml(text))
+        return cls.model_validate_json(text)
+
+
+class SensitivityObservation(BaseModel):
+    """One parameter value and the metrics produced by its scenario."""
+
+    parameter: str
+    value: object
+    scenario_name: str
+    status: str
+    baseline: bool = False
+    metrics: dict[str, float | int | None] = Field(default_factory=dict)
+    manifest_path: Path | None = None
+    error_code: str | None = None
+
+
+class SensitivityComparison(BaseModel):
+    """Comparison of one metric across one parameter sweep."""
+
+    parameter: str
+    metric: str
+    baseline_value: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    absolute_change: float | None = None
+    relative_change: float | None = None
+    range_value: float | None = None
+    monotonic: bool | None = None
+    direction: str | None = None
+
+
+class SensitivityFlipPoint(BaseModel):
+    """One adaptive subsidy flip-point result for a sensitivity setting."""
+
+    parameter: str
+    value: object
+    baseline: bool = False
+    status: str
+    lower: float | None = None
+    upper: float | None = None
+    bracket_width: float | None = None
+    midpoint_probes: int | None = None
+    converged: bool | None = None
+    manifest_path: Path | None = None
+    error_code: str | None = None
+
+
+class SensitivityManifest(BaseModel):
+    """Evidence manifest for a complete sensitivity analysis."""
+
+    manifest_version: str = MANIFEST_VERSION
+    sensitivity_id: str
+    status: str
+    parameter_count: int = Field(ge=0)
+    scenario_count: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    wall_seconds: float = Field(ge=0.0)
+    observations_path: Path
+    comparisons_path: Path
+    flip_points_path: Path | None = None
+    report_path: Path
+    config: dict[str, object] = Field(default_factory=dict)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+
+    def write_json(self, path: Path) -> Path:
+        """Write this manifest as formatted JSON."""
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+
+class SensitivityResult(BaseModel):
+    """Typed result of one or more one-at-a-time sensitivity sweeps."""
+
+    sensitivity_id: str
+    status: str
+    parameter_count: int = Field(ge=0)
+    scenario_count: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    wall_seconds: float = Field(ge=0.0)
+    observations: list[SensitivityObservation] = Field(default_factory=list)
+    comparisons: list[SensitivityComparison] = Field(default_factory=list)
+    flip_points: list[SensitivityFlipPoint] = Field(default_factory=list)
+    observations_path: Path | None = None
+    comparisons_path: Path | None = None
+    flip_points_path: Path | None = None
+    report_path: Path | None = None
+    manifest_path: Path | None = None
+
+    def summary(self) -> dict[str, object]:
+        """Return a deterministic, JSON-friendly sensitivity summary."""
+
+        return {
+            "sensitivity_id": self.sensitivity_id,
+            "status": self.status,
+            "parameter_count": self.parameter_count,
+            "scenario_count": self.scenario_count,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "wall_seconds": round(self.wall_seconds, 3),
+            "comparisons": [comparison.model_dump() for comparison in self.comparisons],
+            "flip_points": [flip_point.model_dump(mode="json") for flip_point in self.flip_points],
+            "artifacts": {
+                "observations": str(self.observations_path),
+                "comparisons": str(self.comparisons_path),
+                "flip_points": str(self.flip_points_path),
+                "report": str(self.report_path),
+                "manifest": str(self.manifest_path),
+            },
+        }
+
+    def observations_dataframe(self) -> pd.DataFrame:
+        """Return observations as a flat DataFrame with metrics as columns."""
+        if not self.observations:
+            return pd.DataFrame()
+        records = []
+        for obs in self.observations:
+            row = {
+                "parameter": obs.parameter,
+                "value": obs.value,
+                "baseline": obs.baseline,
+                "status": obs.status,
+            }
+            row.update(obs.metrics)
+            records.append(row)
+        df = pd.DataFrame(records)
+        return df.sort_values(["parameter", "value"]).reset_index(drop=True)
+
+    def formatted_observations(self) -> str:
+        """Return a human-readable string table of all observations by parameter."""
+        df = self.observations_dataframe()
+        if df.empty:
+            return "No observations recorded."
+
+        lines = []
+        for parameter in sorted(df["parameter"].unique()):
+            lines.append(f"\n{'=' * 80}")
+            lines.append(f"Parameter: {parameter}")
+            lines.append("=" * 80)
+
+            subset = df[df["parameter"] == parameter].sort_values("value")
+            cols = [
+                "value",
+                "baseline",
+                "total_green_harvest_m3",
+                "total_burned_harvest_m3",
+                "total_area_burned_ha",
+                "total_principal_objective_value",
+                "total_agent_objective_value",
+                "final_cohort_count",
+            ]
+            available = [c for c in cols if c in subset.columns]
+
+            # Header
+            header = f"{'Value':>12} | {'Base?':>6} | "
+            col_labels = {
+                "total_green_harvest_m3": "Green Harvest m3",
+                "total_burned_harvest_m3": "Burned Harvest m3",
+                "total_area_burned_ha": "Area Burned ha",
+                "total_principal_objective_value": "Principal Obj",
+                "total_agent_objective_value": "Agent Obj",
+                "final_cohort_count": "Cohorts",
+            }
+            header += " | ".join([f"{col_labels.get(c, c)[:18]:>18}" for c in available[2:]])
+            lines.append(header)
+            lines.append("-" * len(header))
+
+            for _, row in subset.iterrows():
+                base = "✓" if row.get("baseline", False) else ""
+                vals = []
+                for c in available[2:]:
+                    v = row.get(c)
+                    if pd.isna(v) or v is None:
+                        vals.append(f"{'N/A':>18}")
+                    elif "m3" in c or "objective" in c:
+                        vals.append(f"{float(v):>18,.0f}")
+                    elif "ha" in c:
+                        vals.append(f"{float(v):>18,.1f}")
+                    elif "count" in c:
+                        vals.append(f"{float(v):>18,.0f}")
+                    else:
+                        vals.append(f"{v:>18}")
+                lines.append(f"{row['value']:>12} | {base:>6} | " + " | ".join(vals))
+
+        return "\n".join(lines)
 
 
 def safe_slug(value: str) -> str:
@@ -1490,12 +1789,20 @@ __all__ = [
     "AgentYearVolumes",
     "AgeSmashing",
     "ArtifactLayout",
+    "BinarySearchConfig",
+    "BinarySearchResult",
     "DevelopmentType",
     "Diagnostic",
     "Economics",
     "EnsembleConfig",
     "EnsembleManifest",
     "EnsembleResult",
+    "SensitivityComparison",
+    "SensitivityConfig",
+    "SensitivityFlipPoint",
+    "SensitivityManifest",
+    "SensitivityObservation",
+    "SensitivityResult",
     "FireDefaults",
     "IngestManifest",
     "IngestResult",

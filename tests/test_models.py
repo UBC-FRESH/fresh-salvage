@@ -40,10 +40,7 @@ def test_scenario_config_json_roundtrip(tmp_path: Path) -> None:
 def test_scenario_config_yaml_read(tmp_path: Path) -> None:
     yaml_path = tmp_path / "scenario.yaml"
     yaml_path.write_text(
-        "run_id: yaml-run\n"
-        "inputs:\n"
-        "  wl_vfsl_path: /data/WL_VFSL.csv\n"
-        "  output_root: out\n",
+        "run_id: yaml-run\ninputs:\n  wl_vfsl_path: /data/WL_VFSL.csv\n  output_root: out\n",
         encoding="utf-8",
     )
 
@@ -57,8 +54,7 @@ def test_scenario_config_yaml_read(tmp_path: Path) -> None:
 def test_scenario_config_rejects_empty_run_id(tmp_path: Path) -> None:
     config_path = tmp_path / "scenario.json"
     config_path.write_text(
-        '{"run_id": " ", "inputs": '
-        '{"wl_vfsl_path": "/data/WL_VFSL.csv", "output_root": "out"}}',
+        '{"run_id": " ", "inputs": {"wl_vfsl_path": "/data/WL_VFSL.csv", "output_root": "out"}}',
         encoding="utf-8",
     )
 
@@ -69,15 +65,17 @@ def test_scenario_config_rejects_empty_run_id(tmp_path: Path) -> None:
 def test_artifact_layout_properties(tmp_path: Path) -> None:
     layout = ArtifactLayout(output_root=tmp_path / "root")
 
-    assert ARTIFACT_DIRECTORIES == ("data", "manifests", "logs")
+    assert ARTIFACT_DIRECTORIES == ("data", "manifests", "logs", "reports")
     assert layout.data_dir == tmp_path / "root" / "data"
     assert layout.manifests_dir == tmp_path / "root" / "manifests"
     assert layout.logs_dir == tmp_path / "root" / "logs"
+    assert layout.reports_dir == tmp_path / "root" / "reports"
 
     initialized = layout.initialize()
     assert initialized.data_dir.is_dir()
     assert initialized.manifests_dir.is_dir()
     assert initialized.logs_dir.is_dir()
+    assert initialized.reports_dir.is_dir()
 
 
 def test_stand_record() -> None:
@@ -139,9 +137,7 @@ def test_economics_defaults_match_the_calibrated_data_constants() -> None:
     assert economics.burned_price_discount == pytest.approx(data.BURNED_PRICE_DISCOUNT)
     assert economics.green_harvest_cost == pytest.approx(data.GREEN_HARVEST_COST)
     assert economics.burned_harvest_cost == pytest.approx(data.BURNED_HARVEST_COST)
-    assert economics.green_transport_cost_per_m3 == pytest.approx(
-        data.TRANSPORT_COST_PER_M3
-    )
+    assert economics.green_transport_cost_per_m3 == pytest.approx(data.TRANSPORT_COST_PER_M3)
     assert economics.burned_transport_cost_per_m3 == pytest.approx(
         data.BURNED_TRANSPORT_COST_PER_M3
     )

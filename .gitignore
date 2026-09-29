@@ -30,5 +30,6 @@ outputs/
 # Editors and OS
 .vscode/
 .idea/
+.ipynb_checkpoints/
 .DS_Store
 Thumbs.db
