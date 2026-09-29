@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 from fresh_salvage import ensemble, rh
 from fresh_salvage.cli import app
 from fresh_salvage.models import (
+    BinarySearchConfig,
     EnsembleConfig,
     EnsembleManifest,
     EnsembleResult,
@@ -183,6 +184,104 @@ def test_expand_scenarios_rejects_duplicate_scenario_names(tmp_path: Path) -> No
         ensemble.expand_scenarios(config)
 
     assert excinfo.value.code == "ensemble_duplicate_scenario"
+
+
+def test_binary_search_runs_adaptive_midpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run_rh(config, verbose: bool = False) -> RHResult:
+        result = _stub_rh_result(config.run_id)
+        return result.model_copy(
+            update={
+                "decadal_burned_harvest_m3": [
+                    1.0 if config.subsidy_rate_per_m3 >= 25 else 0.0
+                ]
+            }
+        )
+
+    monkeypatch.setattr(ensemble.rh, "run_rh", fake_run_rh)
+    config = EnsembleConfig(
+        ensemble_id="binary-ensemble",
+        base=_base(tmp_path),
+        binary_search=BinarySearchConfig(
+            axis="subsidy_rate_per_m3",
+            lower=20.0,
+            upper=30.0,
+            iterations=3,
+            fixed={"burn_rate_multiplier": 1.0},
+        ),
+        max_workers=1,
+        output_root=tmp_path / "ensemble",
+    )
+
+    result = ensemble.run_ensemble(config)
+
+    assert result.status == "ok"
+    assert len(result.scenarios) == 5  # two endpoints plus three midpoints
+    assert [record.metric_value for record in result.scenarios] == [
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+    ]
+    assert result.scenarios[2].overrides["subsidy_rate_per_m3"] == 25.0
+    assert result.scenarios[3].overrides["subsidy_rate_per_m3"] == 22.5
+
+
+def test_binary_search_stops_when_bracket_reaches_tolerance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run_rh(config, verbose: bool = False) -> RHResult:
+        return _stub_rh_result(config.run_id).model_copy(
+            update={
+                "decadal_burned_harvest_m3": [
+                    1.0 if config.subsidy_rate_per_m3 >= 25 else 0.0
+                ]
+            }
+        )
+
+    monkeypatch.setattr(ensemble.rh, "run_rh", fake_run_rh)
+    config = EnsembleConfig(
+        ensemble_id="binary-tolerance-ensemble",
+        base=_base(tmp_path),
+        binary_search=BinarySearchConfig(
+            lower=20.0,
+            upper=30.0,
+            iterations=8,
+            tolerance=1.0,
+        ),
+        max_workers=1,
+        output_root=tmp_path / "ensemble",
+    )
+
+    result = ensemble.run_ensemble(config)
+
+    # Four midpoint probes narrow [20, 30] to a bracket below $1/m3.
+    assert result.scenario_count == 6
+    assert result.binary_search_result is not None
+    assert result.binary_search_result.lower == 24.375
+    assert result.binary_search_result.upper == 25.0
+    assert result.binary_search_result.bracket_width == 0.625
+    assert result.binary_search_result.midpoint_probes == 4
+    assert result.binary_search_result.converged
+    manifest = EnsembleManifest.read_json(result.manifest_path)
+    assert manifest.binary_search_result == result.binary_search_result
+
+
+def test_binary_search_requires_sequential_workers(tmp_path: Path) -> None:
+    config = EnsembleConfig(
+        ensemble_id="binary-ensemble",
+        base=_base(tmp_path),
+        binary_search=BinarySearchConfig(lower=20.0, upper=30.0, iterations=2),
+        max_workers=2,
+        output_root=tmp_path / "ensemble",
+    )
+
+    with pytest.raises(ensemble.EnsembleError) as excinfo:
+        ensemble.run_ensemble(config)
+
+    assert excinfo.value.code == "ensemble_binary_parallel"
 
 
 def test_expand_scenarios_rejects_invalid_override_values(tmp_path: Path) -> None:

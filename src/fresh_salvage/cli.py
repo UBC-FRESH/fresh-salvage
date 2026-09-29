@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fresh_salvage import __version__, agent, data, ensemble, principal, rh, ws3
+from fresh_salvage import __version__, agent, data, ensemble, principal, rh, sensitivity, ws3
 from fresh_salvage.models import (
     AgentResult,
     AgentRunConfig,
@@ -21,6 +21,8 @@ from fresh_salvage.models import (
     RHResult,
     RHRunConfig,
     ScenarioRunConfig,
+    SensitivityConfig,
+    SensitivityResult,
     WS3Result,
 )
 
@@ -259,6 +261,39 @@ def ensemble_run(
         raise typer.Exit(code=1)
 
 
+@app.command(name="sensitivity-run")
+def sensitivity_run(
+    config_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a sensitivity YAML or JSON config."),
+    ],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON output."),
+    ] = False,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Exit 1 when any scenario fails."),
+    ] = False,
+) -> None:
+    """Run one-at-a-time sensitivity sweeps and compare their metrics."""
+    try:
+        config = SensitivityConfig.read(config_path)
+        result = sensitivity.run_all_sensitivities(config)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code=getattr(exc, "code", "sensitivity_run_failed"),
+            message=str(exc),
+            context={"config_path": str(config_path), "exception_type": type(exc).__name__},
+        )
+        _print_failure(diagnostic, json_output, command="sensitivity-run")
+        raise typer.Exit(code=1)
+    _print_sensitivity_summary(result, json_output)
+    if strict and result.status != "ok":
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def export(
     json_output: Annotated[
@@ -293,9 +328,7 @@ def _print_ingest_summary(result: IngestResult, json_output: bool) -> None:
     console.print(zone_table)
 
     for diagnostic in result.diagnostics:
-        console.print(
-            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
-        )
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
 
     console.print("Artifacts:")
     console.print(f"  {result.data_path}")
@@ -329,9 +362,7 @@ def _print_ws3_summary(result: WS3Result, json_output: bool) -> None:
     console.print(period_table)
 
     for diagnostic in result.diagnostics:
-        console.print(
-            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
-        )
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
 
     console.print("Artifacts:")
     console.print(f"  {result.data_path}")
@@ -369,9 +400,7 @@ def _print_principal_summary(result: PrincipalResult, json_output: bool) -> None
     console.print(year_table)
 
     for diagnostic in result.diagnostics:
-        console.print(
-            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
-        )
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
 
     console.print("Artifacts:")
     console.print(f"  {result.data_path}")
@@ -411,9 +440,7 @@ def _print_agent_summary(result: AgentResult, json_output: bool) -> None:
     console.print(year_table)
 
     for diagnostic in result.diagnostics:
-        console.print(
-            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
-        )
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
 
     console.print("Artifacts:")
     console.print(f"  {result.data_path}")
@@ -457,9 +484,7 @@ def _print_rh_summary(result: RHResult, json_output: bool) -> None:
     console.print(step_table)
 
     for diagnostic in result.diagnostics:
-        console.print(
-            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
-        )
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
 
     console.print("Artifacts:")
     console.print(f"  {result.steps_path}")
@@ -476,8 +501,7 @@ def _print_ensemble_summary(result: EnsembleResult, json_output: bool) -> None:
         return
 
     console.print(
-        f"[bold green]Ensemble complete:[/bold green] {result.ensemble_id} "
-        f"({result.status})"
+        f"[bold green]Ensemble complete:[/bold green] {result.ensemble_id} ({result.status})"
     )
     console.print(
         f"  Scenarios: {result.scenario_count} "
@@ -501,12 +525,53 @@ def _print_ensemble_summary(result: EnsembleResult, json_output: bool) -> None:
     console.print(scenario_table)
 
     for diagnostic in result.diagnostics:
-        console.print(
-            f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}"
-        )
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
 
     console.print("Artifacts:")
     console.print(f"  {result.scenarios_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_sensitivity_summary(result: SensitivityResult, json_output: bool) -> None:
+    """Print a sensitivity-analysis summary as JSON or Rich output."""
+
+    if json_output:
+        payload = {"ok": True, "command": "sensitivity-run", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return
+
+    console.print(
+        f"[bold green]Sensitivity analysis complete:[/bold green] "
+        f"{result.sensitivity_id} ({result.status})"
+    )
+    console.print(
+        f"  Parameters: {result.parameter_count}; scenarios: {result.scenario_count} "
+        f"({result.succeeded} succeeded, {result.failed} failed)"
+    )
+    console.print(f"  Wall time: {result.wall_seconds:.1f} s")
+
+    # Print per-scenario observations table
+    console.print("\n[bold]Per-scenario observations:[/bold]")
+    console.print(result.formatted_observations())
+
+    # Print comparison ranges
+    table = Table(title="Sensitivity comparison ranges")
+    table.add_column("Parameter")
+    table.add_column("Metric")
+    table.add_column("Range", justify="right")
+    table.add_column("Direction")
+    for comparison in result.comparisons:
+        table.add_row(
+            comparison.parameter,
+            comparison.metric,
+            "" if comparison.range_value is None else f"{comparison.range_value:,.3g}",
+            comparison.direction or "",
+        )
+    console.print(table)
+    console.print("Artifacts:")
+    console.print(f"  {result.observations_path}")
+    console.print(f"  {result.comparisons_path}")
+    console.print(f"  {result.report_path}")
     console.print(f"  {result.manifest_path}")
 
 
