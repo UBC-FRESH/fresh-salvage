@@ -432,13 +432,20 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
 
 
 def test_annual_grade_mix_uses_initial_inventory_then_transitions() -> None:
-    initial = {"Peeler": 0.2, "Sawlog": 0.6, "Pulpwood": 0.2}
+    initial = {"Peeler": 0.2, "Sawlog": 0.6, "Pulpwood": 0.2, "Other": 0.0}
     mixes = data.annual_grade_mix(initial, horizon=3)
 
-    assert mixes[0] == pytest.approx((0.2, 0.6, 0.2))
+    assert mixes[0] == pytest.approx((0.2, 0.6, 0.2, 0.0))
     expected_year_2 = tuple(
-        sum(initial[input_grade] * data.BURNED_GRADE_TRANSITION[input_grade][output_grade]
-            for input_grade in data.GRADE_ORDER)
+        sum(
+            initial[input_grade]
+            * (
+                data.BURNED_GRADE_TRANSITION[input_grade].get(output_grade, 0.0)
+                if input_grade != "Other"
+                else float(output_grade == "Other")
+            )
+            for input_grade in data.GRADE_ORDER
+        )
         for output_grade in data.GRADE_ORDER
     )
     assert mixes[1] == pytest.approx(expected_year_2)

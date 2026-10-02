@@ -144,7 +144,10 @@ BURNED_GRADE_TRANSITION = {
     "Sawlog": {"Peeler": 0.00, "Sawlog": 0.80, "Pulpwood": 0.20},
     "Pulpwood": {"Peeler": 0.0, "Sawlog": 0.0, "Pulpwood": 1.0},
 }
-GRADE_ORDER = ("Peeler", "Sawlog", "Pulpwood")
+# ``Other`` is an ungraded species bucket in the ingested schema. It is kept
+# in the annual mix as an identity grade so reconstructed volumes still sum to
+# the scalar burned inventory.
+GRADE_ORDER = ("Peeler", "Sawlog", "Pulpwood", "Other")
 
 
 def annual_grade_mix(
@@ -160,14 +163,21 @@ def annual_grade_mix(
 
     if horizon <= 0:
         raise ValueError("horizon must be positive")
-    current = np.array([float(initial_mix[grade]) for grade in GRADE_ORDER])
+    current = np.array([float(initial_mix.get(grade, 0.0)) for grade in GRADE_ORDER])
     total = float(current.sum())
     if total <= 0.0:
         raise ValueError("initial grade mix must have positive total share")
     current /= total
     transition = np.array(
         [
-            [BURNED_GRADE_TRANSITION[input_grade][output_grade] for output_grade in GRADE_ORDER]
+            [
+                (
+                    BURNED_GRADE_TRANSITION[input_grade].get(output_grade, 0.0)
+                    if input_grade != "Other"
+                    else float(output_grade == "Other")
+                )
+                for output_grade in GRADE_ORDER
+            ]
             for input_grade in GRADE_ORDER
         ],
         dtype=float,
