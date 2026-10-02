@@ -50,6 +50,33 @@ def _solve(cohorts, *, horizon=3, aac=1e12, decay_rate=0.85, burned_limit=None):
     )
 
 
+def test_annual_burned_value_uses_initial_mix_then_transition() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="graded",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        green_volume_m3=100.0,
+        burned_volume_m3=100.0,
+        cashflow=0.0,
+        burned_value=7_600.0,
+        burn_rate=0.1,
+        burned_grade_mix=(0.2, 0.6, 0.2, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+    )
+
+    values = principal._annual_burned_values(cohort, horizon=2)
+    assert values[0] == pytest.approx(7_600.0)
+    expected_mix_year_2 = data.annual_grade_mix(
+        dict(zip(data.GRADE_ORDER, cohort.burned_grade_mix, strict=True)), horizon=2
+    )[1]
+    expected_value_year_2 = 100.0 * data.weighted_grade_price(
+        expected_mix_year_2,
+        dict(zip(data.GRADE_ORDER, cohort.burned_grade_prices, strict=True)),
+    )
+    assert values[1] == pytest.approx(expected_value_year_2)
+
+
 def _fractions(result):
     return {
         (offer.cohort_id, offer.year): offer.offer_fraction for offer in result.offers

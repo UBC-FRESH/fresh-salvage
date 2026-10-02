@@ -35,9 +35,11 @@ parses, at the boundary:
   Phase 2a stands of the cohort's development type (stratum
   ``{bec}_{species}`` -> ``{species_group}_{BEC}``);
 - ``cashflow[c]`` (stumpage net of subsidy, rates from the configured
-  ``economics`` surface, defaulting to the calibrated ``data.py`` constants)
-  and ``burned_value[c]`` (burned volume priced at the DT's volume-weighted
-  average burned price);
+   ``economics`` surface, defaulting to the calibrated ``data.py`` constants)
+   and ``burned_value[c]`` (burned volume priced at the DT's initial
+   volume-weighted burned-grade mix). The expected burn-loss coefficient uses
+   that mix in year 1 and applies the configured grade transition once per
+   later year; the mix is predetermined and independent of offer decisions;
 - ``burn_rate[c] = 1 / MFRI[bec_zone]`` from ``fire.py``.
 
 Variables (both continuous in ``[0, 1]``):
@@ -488,7 +490,8 @@ def _expected_burn_losses(
     """Return ``(year_index, expected_loss)`` pairs for one cohort.
 
     The expected loss charged when the cohort is still unoffered in year
-    ``y`` (1-based) is ``burn_rate * burned_value * (1 - decay_rate**(y-1))``.
+    ``y`` (1-based) uses the annual predetermined burned-grade value and is
+    ``burn_rate * annual_burned_value[y] * (1 - decay_rate**(y-1))``.
     """
 
     if cohort.burn_rate == 0.0 or cohort.burned_value == 0.0:
