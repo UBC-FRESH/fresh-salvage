@@ -170,6 +170,27 @@ def test_annual_burned_price_uses_initial_mix_then_transition() -> None:
     assert agent._annual_burned_price(cohort, 1) == pytest.approx(year_2_price)
 
 
+def test_reported_burned_grade_volumes_sum_to_burned_inventory() -> None:
+    cohort = AgentCohort(
+        cohort_id="graded-report",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        standing_volume_m3=1.0,
+        burn_rate=0.5,
+        green_price_m3=0.0,
+        burned_price_m3=82.55,
+        burned_grade_mix=(0.2, 0.6, 0.2, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+    )
+
+    result = _solve([cohort], horizon=3)
+    for volumes in result.per_year_volumes:
+        assert sum(volumes.burned_grade_volume_m3.values()) == pytest.approx(
+            volumes.burned_volume_m3, abs=BALANCE_TOLERANCE
+        )
+
+
 def test_unsubsidized_salvage_is_not_economic_at_calibrated_costs() -> None:
     """At subsidy 0 the agent never salvages on the SPF sawlog basis.
 

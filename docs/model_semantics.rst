@@ -228,8 +228,11 @@ where, per cohort (all volumes m3, parsed at the boundary):
    offered once (the subsidy is a cost to the principal).
 
 ``burned_value[c]``
-   The cohort's burned volume priced at its development type's
-   volume-weighted average burned price.
+   The cohort's burned volume priced at its development type's initial
+   volume-weighted burned-grade mix. Year 1 uses the ingested burned-grade
+   composition; each later year applies ``BURNED_GRADE_TRANSITION`` once when
+   calculating the coefficient. The mix is predetermined and independent of
+   offer decisions.
 
 ``R[c] * burned_value[c] * (1 - d**(y-1))``
    The expected burned-wood loss charged against volume not yet offered by
@@ -275,8 +278,11 @@ dynamics above:
 Prices are the development type's volume-weighted average grade prices
 (weighted by the configured ``green_prices``), and burned prices carry the
 burned price discount (0.65) through the prompt-salvage grade transition
-below. The subsidy accrues per m3 of burned volume **actually salvaged**,
-not per m3 offered. Offers are an input: a uniform
+below. The agent uses the resulting annual predetermined grade mix only to
+populate the existing salvage coefficients; it keeps scalar ``B[c,t]`` and
+reports ``burned_grade_volume_m3`` so the grade volumes sum to ``B[c,t]``.
+The subsidy accrues per m3 of burned volume **actually salvaged**, not per m3
+offered. Offers are an input: a uniform
 ``default_offer_fraction`` (1.0 = fully offered), or a principal offer
 table (``cohort_id``/``year``/``offer_fraction`` columns, parquet or csv).
 

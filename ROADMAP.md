@@ -16,6 +16,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P5 Rolling-horizon coordination loop and ensemble driver | TBD | `feature/p5-rolling-horizon` | Complete |
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
+| Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -231,6 +232,10 @@ rolling-horizon pipeline.
 Evidence commits: `5582def`, `4007489`, `4114bd5`.
 
 ## Current Next Steps
+
+The Grade Transition work is tracked in parent issue #18, with principal child
+issue #20 and agent child issue #21. Completed execution steps are recorded in
+issues #22-#26; agent rolling-horizon verification remains in #27.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity
