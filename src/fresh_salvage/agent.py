@@ -59,11 +59,11 @@ Objective (maximize agent NPV, ``df_t = 1 / (1 + discount_rate) ** t``)::
 with ``green_margin_m3 = green_price - green_harvest_cost -
 green_transport_cost - green_stumpage_rate`` and ``salvage_margin_m3 =
 burned_price - burned_harvest_cost - burned_transport_cost -
-burned_stumpage_rate + subsidy_rate_per_m3`` (prices are the development
-type's volume-weighted average grade prices, weighted by the configured
-``economics.green_prices`` with burned prices at the configured discount; the
+burned_stumpage_rate + subsidy_rate_per_m3``. The burned price is a
+year-specific coefficient from the predetermined annual grade mix, with
+burned prices derived from the configured green prices and discount. The
 economic surface defaults to the calibrated ``data.py`` constants and the
-subsidy accrues per m3 of burned volume actually salvaged).
+subsidy accrues per m3 of burned volume actually salvaged.
 
 Documented deviations from the prototype
 ----------------------------------------
@@ -159,8 +159,9 @@ class AgentCohort:
 
     ``standing_volume_m3`` is the initial live volume; ``burn_rate`` is the
     annual burn probability ``1 / MFRI`` of the cohort's BEC zone;
-    ``green_price_m3``/``burned_price_m3`` are the development type's
-    volume-weighted average prices ($/m3).
+    ``green_price_m3``/``burned_price_m3`` are the development type's initial
+    volume-weighted average prices ($/m3). Later burned prices use the
+    predetermined annual grade mix.
     """
 
     cohort_id: str
