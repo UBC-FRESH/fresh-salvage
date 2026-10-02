@@ -113,9 +113,12 @@ from fresh_salvage.data import (
     BURNED_GRADE_COLUMNS,
     BURNED_PRICE_DISCOUNT,
     GRADE_COLUMNS,
+    GRADE_ORDER,
     GREEN_PRICES,
     SPECIES_GROUP_MAP,
     UNKNOWN_SPECIES_GROUP,
+    annual_grade_mix,
+    weighted_grade_price,
 )
 from fresh_salvage.models import (
     AgentDecisionRecord,
@@ -168,6 +171,8 @@ class AgentCohort:
     burn_rate: float
     green_price_m3: float
     burned_price_m3: float
+    burned_grade_mix: tuple[float, ...] | None = None
+    burned_grade_prices: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -346,16 +351,16 @@ def build_agent_lp(
             - economics.green_transport_cost_per_m3
             - economics.green_stumpage_rate
         )
-        salvage_margin = (
-            cohort.burned_price_m3
-            - economics.burned_harvest_cost
-            - economics.burned_transport_cost_per_m3
-            - economics.burned_stumpage_rate
-            + economics.subsidy_rate_per_m3
-        )
         base = c_index * horizon
         for year in range(horizon):
             discount_factor = 1.0 / (1.0 + discount_rate) ** (year + 1)
+            salvage_margin = (
+                _annual_burned_price(cohort, year)
+                - economics.burned_harvest_cost
+                - economics.burned_transport_cost_per_m3
+                - economics.burned_stumpage_rate
+                + economics.subsidy_rate_per_m3
+            )
             costs[harvest_offset + base + year] = (
                 discount_factor * cohort.standing_volume_m3 * green_margin
             )
@@ -463,6 +468,28 @@ def build_agent_lp(
     return AgentLP(model=model, decision_columns=decision_columns, horizon=horizon)
 
 
+def _annual_burned_price(cohort: AgentCohort, year: int) -> float:
+    """Return the predetermined burned price for a zero-based model year."""
+
+    if cohort.burned_grade_mix is None or cohort.burned_grade_prices is None:
+        return cohort.burned_price_m3
+    initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
+    prices = dict(zip(GRADE_ORDER, cohort.burned_grade_prices, strict=True))
+    if sum(initial_mix.values()) <= 0.0:
+        return cohort.burned_price_m3
+    mix = annual_grade_mix(initial_mix, year + 1)[year]
+    return weighted_grade_price(mix, prices)
+
+
+def _annual_burned_grade_mix(cohort: AgentCohort, year: int) -> tuple[float, ...]:
+    """Return the predetermined grade mix used to report ``B[c,t]``."""
+
+    if cohort.burned_grade_mix is None or sum(cohort.burned_grade_mix) <= 0.0:
+        return (0.0, 0.0, 0.0, 1.0)
+    initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
+    return annual_grade_mix(initial_mix, year + 1)[year]
+
+
 def solve_agent(
     cohorts: list[AgentCohort],
     offers: list[tuple[float, ...]],
@@ -509,6 +536,7 @@ def solve_agent(
     influx_m3 = np.zeros(horizon)
     live_end_m3 = np.zeros(horizon)
     burned_end_m3 = np.zeros(horizon)
+    burned_grade_m3 = {grade: np.zeros(horizon) for grade in GRADE_ORDER}
     active_cohort_years = 0
     for column, (c_index, year) in enumerate(built.decision_columns):
         cohort = cohorts[c_index]
@@ -541,6 +569,10 @@ def solve_agent(
         influx_m3[year] += influx * volume
         live_end_m3[year] += live * volume
         burned_end_m3[year] += burned * volume
+        for grade, share in zip(
+            GRADE_ORDER, _annual_burned_grade_mix(cohort, year), strict=True
+        ):
+            burned_grade_m3[grade][year] += burned * volume * share
         decisions.append(
             AgentDecisionRecord(
                 cohort_id=cohort.cohort_id,
@@ -567,6 +599,9 @@ def solve_agent(
                 burn_influx_m3=float(influx_m3[year]),
                 live_volume_m3=float(live_end_m3[year]),
                 burned_volume_m3=float(burned_end_m3[year]),
+                burned_grade_volume_m3={
+                    grade: float(burned_grade_m3[grade][year]) for grade in GRADE_ORDER
+                },
             )
             for year in range(horizon)
         ],
@@ -683,7 +718,7 @@ def _development_type_economics(
     *,
     green_prices: dict[str, float] | None = None,
     burned_price_discount: float | None = None,
-) -> dict[str, dict[str, float]]:
+) -> dict[str, dict[str, object]]:
     """Aggregate the stands table into per-development-type prices.
 
     Returns ``{development_type: {"green_price": ..., "burned_price": ...}}``
@@ -716,7 +751,7 @@ def _development_type_economics(
             f"stands table is missing required columns: {sorted(missing)}",
         )
 
-    economics: dict[str, dict[str, float]] = {}
+    economics: dict[str, dict[str, object]] = {}
     for development_type, group in frame.groupby("development_type", sort=True):
         green = float(group["Total_Green_Vol"].sum())
         if green <= 0.0:
@@ -727,12 +762,39 @@ def _development_type_economics(
             green_value += float(group[column].sum()) * green_prices[price_key]
         burned = float(group["Total_Burned_Vol"].sum())
         burned_value = 0.0
+        grade_volumes = {grade: 0.0 for grade in GRADE_ORDER}
+        grade_values = {grade: 0.0 for grade in GRADE_ORDER}
         for column in BURNED_GRADE_COLUMNS:
             price_key = column[len("B_") : -len("_Vol")]
-            burned_value += float(group[column].sum()) * burned_prices[price_key]
+            volume = float(group[column].sum())
+            price = burned_prices[price_key]
+            burned_value += volume * price
+            if price_key == "Other":
+                grade = "Other"
+            else:
+                suffix = price_key.rsplit("_", 1)[1]
+                grade = {
+                    "Peelers": "Peeler",
+                    "Sawlog": "Sawlog",
+                    "Pulpwood": "Pulpwood",
+                }[suffix]
+            grade_volumes[grade] += volume
+            grade_values[grade] += volume * price
+        grade_mix = tuple(
+            grade_volumes[grade] / burned if burned > 0.0 else 0.0
+            for grade in GRADE_ORDER
+        )
+        grade_prices = tuple(
+            grade_values[grade] / grade_volumes[grade]
+            if grade_volumes[grade] > 0.0
+            else 0.0
+            for grade in GRADE_ORDER
+        )
         economics[str(development_type)] = {
             "green_price": green_value / green,
             "burned_price": burned_value / burned if burned > 0.0 else 0.0,
+            "burned_grade_mix": grade_mix,
+            "burned_grade_prices": grade_prices,
         }
     return economics
 
@@ -869,6 +931,8 @@ def _parse_are_cohorts(
                 burn_rate=burn_rate,
                 green_price_m3=price_by_dt[development_type]["green_price"],
                 burned_price_m3=price_by_dt[development_type]["burned_price"],
+                burned_grade_mix=price_by_dt[development_type]["burned_grade_mix"],
+                burned_grade_prices=price_by_dt[development_type]["burned_grade_prices"],
             )
         )
     if not cohorts:
