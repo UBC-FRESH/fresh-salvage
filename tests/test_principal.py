@@ -105,6 +105,32 @@ def test_offer_coefficients_precompute_fire_and_decay_by_offer_year() -> None:
     )
 
 
+def test_principal_lp_uses_annual_coefficients_without_new_columns() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="wired-fire-decay",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        green_volume_m3=100.0,
+        burned_volume_m3=10.0,
+        cashflow=1_472.5,
+        burned_value=1_000.0,
+        burn_rate=0.1,
+        burned_grade_mix=(1.0, 0.0, 0.0, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+        green_stumpage_rate=15.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+    )
+
+    built = principal.build_principal_lp([cohort], horizon=3, decay_rate=0.85)
+    costs = built.model.getLp().col_cost_
+
+    assert list(costs[:3]) == pytest.approx((1472.5, 1303.25, 1154.225))
+    assert list(costs[3:]) == pytest.approx((0.0, 22.185, 47.25283875))
+    assert built.model.getNumCol() == 2 * 3
+
+
 def _fractions(result):
     return {
         (offer.cohort_id, offer.year): offer.offer_fraction for offer in result.offers

@@ -275,8 +275,9 @@ def build_principal_lp(
     offset = 0.0
     for c_index, cohort in enumerate(cohorts):
         base = c_index * horizon
-        costs[base : base + horizon] = cohort.cashflow
-        for year, loss in _expected_burn_losses(cohort, horizon, decay_rate):
+        coefficients = _principal_offer_coefficients(cohort, horizon, decay_rate)
+        costs[base : base + horizon] = coefficients.annual_offer
+        for year, loss in enumerate(coefficients.annual_burn_loss):
             costs[offer_count + base + year] = loss
             offset -= loss
     model.changeColsCost(
