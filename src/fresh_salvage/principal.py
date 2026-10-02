@@ -157,6 +157,19 @@ class PrincipalCohort:
     burn_rate: float
     burned_grade_mix: tuple[float, ...] | None = None
     burned_grade_prices: tuple[float, ...] | None = None
+    green_stumpage_rate: float | None = None
+    burned_stumpage_rate: float | None = None
+    subsidy_rate_per_m3: float | None = None
+
+
+@dataclass(frozen=True)
+class PrincipalOfferCoefficients:
+    """Predetermined per-offer-year coefficients for one cohort."""
+
+    annual_burned_volume_m3: tuple[float, ...]
+    annual_burned_price_m3: tuple[float, ...]
+    annual_offer: tuple[float, ...]
+    annual_burn_loss: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -496,23 +509,115 @@ def _expected_burn_losses(
 
     if cohort.burn_rate == 0.0 or cohort.burned_value == 0.0:
         return []
-    burned_values = _annual_burned_values(cohort, horizon)
-    return [
-        (year, cohort.burn_rate * burned_values[year] * (1.0 - decay_rate**year))
-        for year in range(horizon)
-    ]
+    coefficients = _principal_offer_coefficients(cohort, horizon, decay_rate)
+    return list(enumerate(coefficients.annual_burn_loss))
 
 
-def _annual_burned_values(cohort: PrincipalCohort, horizon: int) -> list[float]:
+def _principal_offer_coefficients(
+    cohort: PrincipalCohort, horizon: int, decay_rate: float
+) -> PrincipalOfferCoefficients:
+    """Precompute deterministic fire/decay coefficients for offer years.
+
+    A cohort is simulated as unoffered through each candidate offer year. The
+    resulting state at that year supplies the direct offer coefficient and the
+    annual burned-value coefficient. This is a marginal, predetermined path;
+    it does not add fire or inventory state variables to the principal LP.
+    """
+
+    if horizon <= 0:
+        raise PrincipalError(
+            "principal_invalid_horizon", f"horizon must be positive, got {horizon}"
+        )
+    if not 0.0 <= decay_rate <= 1.0:
+        raise PrincipalError(
+            "principal_invalid_decay", f"decay_rate must lie in [0, 1]: {decay_rate}"
+        )
+
+    configured_economics = (
+        cohort.green_stumpage_rate,
+        cohort.burned_stumpage_rate,
+        cohort.subsidy_rate_per_m3,
+    )
+    if any(value is None for value in configured_economics):
+        burned_values = _annual_burned_values(cohort, horizon)
+        losses = tuple(
+            cohort.burn_rate * value * (1.0 - decay_rate**year)
+            for year, value in enumerate(burned_values)
+        )
+        return PrincipalOfferCoefficients(
+            annual_burned_volume_m3=(cohort.burned_volume_m3,) * horizon,
+            annual_burned_price_m3=tuple(
+                value / cohort.burned_volume_m3
+                if cohort.burned_volume_m3 > 0.0
+                else 0.0
+                for value in burned_values
+            ),
+            annual_offer=(cohort.cashflow,) * horizon,
+            annual_burn_loss=losses,
+        )
+
+    annual_burned_volume = _annual_burned_volumes(cohort, horizon, decay_rate)
+    annual_burned_values = _annual_burned_values(
+        cohort, horizon, annual_burned_volume
+    )
+    annual_burned_prices = tuple(
+        value / volume if volume > 0.0 else 0.0
+        for value, volume in zip(annual_burned_values, annual_burned_volume, strict=True)
+    )
+    annual_offer = tuple(
+        cohort.green_volume_m3 * (1.0 - cohort.burn_rate) ** year
+        * cohort.green_stumpage_rate
+        + volume * (cohort.burned_stumpage_rate - cohort.subsidy_rate_per_m3)
+        for year, volume in enumerate(annual_burned_volume)
+    )
+    annual_burn_loss = tuple(
+        cohort.burn_rate * value * (1.0 - decay_rate**year)
+        for year, value in enumerate(annual_burned_values)
+    )
+    return PrincipalOfferCoefficients(
+        annual_burned_volume_m3=tuple(annual_burned_volume),
+        annual_burned_price_m3=annual_burned_prices,
+        annual_offer=annual_offer,
+        annual_burn_loss=annual_burn_loss,
+    )
+
+
+def _annual_burned_volumes(
+    cohort: PrincipalCohort, horizon: int, decay_rate: float
+) -> list[float]:
+    """Return burned inventory available at each possible offer year."""
+
+    live = float(cohort.green_volume_m3)
+    burned = float(cohort.burned_volume_m3)
+    volumes: list[float] = []
+    for _ in range(horizon):
+        volumes.append(burned)
+        influx = fire.burn_influx(live, cohort.burn_rate)
+        live = fire.live_volume_after(live, 0.0, influx)
+        burned = fire.burned_volume_after(burned, influx, 0.0, decay_rate)
+    return volumes
+
+
+def _annual_burned_values(
+    cohort: PrincipalCohort,
+    horizon: int,
+    burned_volumes: list[float] | tuple[float, ...] | None = None,
+) -> list[float]:
     """Return burned values under the predetermined annual grade mix."""
 
     if cohort.burned_grade_mix is None or cohort.burned_grade_prices is None:
         return [cohort.burned_value] * horizon
+    if sum(cohort.burned_grade_mix) <= 0.0:
+        return [0.0] * horizon
+    if burned_volumes is None:
+        burned_volumes = [cohort.burned_volume_m3] * horizon
     initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
     prices = dict(zip(GRADE_ORDER, cohort.burned_grade_prices, strict=True))
     return [
-        cohort.burned_volume_m3 * weighted_grade_price(mix, prices)
-        for mix in annual_grade_mix(initial_mix, horizon)
+        volume * weighted_grade_price(mix, prices)
+        for volume, mix in zip(
+            burned_volumes, annual_grade_mix(initial_mix, horizon), strict=True
+        )
     ]
 
 
@@ -760,6 +865,9 @@ def _parse_are_cohorts(
                 burn_rate=burn_rate,
                 burned_grade_mix=price_by_dt[development_type]["burned_grade_mix"],
                 burned_grade_prices=price_by_dt[development_type]["burned_grade_prices"],
+                green_stumpage_rate=economics.green_stumpage_rate,
+                burned_stumpage_rate=economics.burned_stumpage_rate,
+                subsidy_rate_per_m3=economics.subsidy_rate_per_m3,
             )
         )
     if not cohorts:
@@ -792,6 +900,7 @@ __all__ = [
     "PrincipalCohort",
     "PrincipalError",
     "PrincipalLP",
+    "PrincipalOfferCoefficients",
     "build_principal_lp",
     "load_cohorts",
     "run_principal",
