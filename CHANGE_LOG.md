@@ -12,6 +12,9 @@ This is the project narrative for `fresh-salvage`. Newest entries first
   now report grade volumes that sum to scalar `B[c,t]`. Tracked in GitHub
   parent issue #18, child issues #20/#21, with commits `e7d4a1c`, `d1d97ca`,
   `8a8251c`, `dec54ad`, and `ad92cf0`.
+- Opened principal follow-up issue #28 for predetermined per-offer-year fire
+  and burned-volume-decay objective coefficients without changing the current
+  objective expression or LP structure.
 - Created GitHub Phase 7 issue #3 and linked child issues #5-#16 for the
   sensitivity-analysis and adaptive subsidy flip-point work on branch
   `version1.1(SensivityAnalysis&BinaryFlippingPoint)`.

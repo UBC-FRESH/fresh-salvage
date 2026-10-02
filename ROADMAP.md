@@ -235,7 +235,8 @@ Evidence commits: `5582def`, `4007489`, `4114bd5`.
 
 The Grade Transition work is tracked in parent issue #18, with principal child
 issue #20 and agent child issue #21. Completed execution steps are recorded in
-issues #22-#26; agent rolling-horizon verification remains in #27.
+issues #22-#27. Principal fire and decay coefficient follow-up work is tracked
+in issue #28.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity
