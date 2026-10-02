@@ -15,6 +15,10 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 - Opened principal follow-up issue #28 for predetermined per-offer-year fire
   and burned-volume-decay objective coefficients without changing the current
   objective expression or LP structure.
+- Implemented issue #28 on branch `version1.3(PrincipalModelFire/Decay)`:
+  principal offer and burned-loss coefficients now use deterministic annual
+  fire, volume-retention, and grade-transition paths while preserving the
+  existing LP columns, rows, objective algebra, and constraints.
 - Created GitHub Phase 7 issue #3 and linked child issues #5-#16 for the
   sensitivity-analysis and adaptive subsidy flip-point work on branch
   `version1.1(SensivityAnalysis&BinaryFlippingPoint)`.

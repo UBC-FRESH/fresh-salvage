@@ -201,8 +201,8 @@ burned wood:
 
 .. code-block:: text
 
-   maximize  sum_{c,y} cashflow[c] * offer[c,y]
-             - R[c] * burned_value[c] * (1 - d**(y-1)) * (1 - cum_offer[c,y])
+   maximize  sum_{c,y} annual_offer[c,y] * offer[c,y]
+              - annual_burn_loss[c,y] * (1 - cum_offer[c,y])
 
    cum_offer[c,y] = sum_{t<=y} offer[c,t]           (definition rows)
    sum_y offer[c,y] <= 1                            (offer once)
@@ -222,23 +222,22 @@ where, per cohort (all volumes m3, parsed at the boundary):
    the stands of the cohort's development type — this is how the ingested
    2025 severity stock enters the LP layers.
 
-``cashflow[c]``
-   ``green_vol * green_stumpage + burned_vol * burned_stumpage
-   - burned_vol * subsidy`` — the principal's take when the whole cohort is
-   offered once (the subsidy is a cost to the principal).
+``annual_offer[c,y]``
+   The direct principal offer coefficient for cohort ``c`` in year ``y``.
+   It is precomputed from expected live volume, burned volume, stumpage, and
+   subsidy rates; the subsidy is a cost to the principal.
 
-``burned_value[c]``
-   The cohort's burned volume priced at its development type's initial
-   volume-weighted burned-grade mix. Year 1 uses the ingested burned-grade
-   composition; each later year applies ``BURNED_GRADE_TRANSITION`` once when
-   calculating the coefficient. The mix is predetermined and independent of
-   offer decisions.
+``annual_burned_value[c,y]``
+   The expected burned volume available at offer year ``y`` priced at the
+   development type's transitioned grade mix. Year 1 uses the ingested
+   burned-grade composition; each later year applies
+   ``BURNED_GRADE_TRANSITION`` once. The mix is predetermined and independent
+   of offer decisions.
 
-``R[c] * burned_value[c] * (1 - d**(y-1))``
+``annual_burn_loss[c,y]``
    The expected burned-wood loss charged against volume not yet offered by
-   year ``y``: the MFRI-weighted probability of burning times the decayed
-   burned value. (The prototype charged the full decayed value every year,
-   implicitly ``R = 1``; here it is an expected loss.)
+   year ``y``. It uses the predetermined fire influx, burned-volume retention,
+   and annual transitioned grade price.
 
 The AAC ceiling (default **2,937,509 m3/yr**; AAC is the Annual Allowable
 Cut, the regulator's annual harvest ceiling) bounds annual *offered green*

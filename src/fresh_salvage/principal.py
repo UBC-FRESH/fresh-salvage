@@ -12,8 +12,8 @@ linear descendant of the binary ``P_RH_Version.py``) maximizes, per stand
 
 with ``cum_offer_{s,y} = sum_{t<=y} offer_{s,t}``,
 ``principal_cashflow_s = green_vol*green_stumpage + burned_vol*burned_stumpage
-- burned_vol*subsidy``, and ``loss_of_burned_wood_{s,y} =
-revenue_burned_timber_s * (1 - decay_rate**(y-1))``, subject to
+- burned_vol*subsidy``, and ``loss_of_burned_wood_{s,y}`` is the expected
+annual burned-value loss, subject to
 ``sum_y offer_{s,y} <= 1`` (offer once) and per-year AAC / green / burned
 volume ceilings.
 
@@ -34,12 +34,11 @@ parses, at the boundary:
   ``burn_share[dt] = Total_Burned_Vol / Total_Green_Vol`` aggregated over the
   Phase 2a stands of the cohort's development type (stratum
   ``{bec}_{species}`` -> ``{species_group}_{BEC}``);
-- ``cashflow[c]`` (stumpage net of subsidy, rates from the configured
-   ``economics`` surface, defaulting to the calibrated ``data.py`` constants)
-   and ``burned_value[c]`` (burned volume priced at the DT's initial
-   volume-weighted burned-grade mix). The expected burn-loss coefficient uses
-   that mix in year 1 and applies the configured grade transition once per
-   later year; the mix is predetermined and independent of offer decisions;
+- ``annual_offer[c,y]`` (the direct offer coefficient) and
+   ``annual_burn_loss[c,y]`` (the unoffered burned-value loss coefficient),
+   precomputed for every offer year from the configured economics, expected
+   fire influx, burned-volume decay, and annual grade mix. The mix is
+   predetermined and independent of offer decisions;
 - ``burn_rate[c] = 1 / MFRI[bec_zone]`` from ``fire.py``.
 
 Variables (both continuous in ``[0, 1]``):
@@ -49,9 +48,8 @@ Variables (both continuous in ``[0, 1]``):
 
 Objective (maximize)::
 
-    sum_{c,y} cashflow[c] * offer[c,y]
-              - burn_rate[c] * burned_value[c] * (1 - decay_rate**(y-1))
-                * (1 - cum_offer[c,y])
+    sum_{c,y} annual_offer[c,y] * offer[c,y]
+              - annual_burn_loss[c,y] * (1 - cum_offer[c,y])
 
 Constraints (every volume row is in m3/yr)::
 
@@ -504,8 +502,8 @@ def _expected_burn_losses(
     """Return ``(year_index, expected_loss)`` pairs for one cohort.
 
     The expected loss charged when the cohort is still unoffered in year
-    ``y`` (1-based) uses the annual predetermined burned-grade value and is
-    ``burn_rate * annual_burned_value[y] * (1 - decay_rate**(y-1))``.
+    ``y`` (1-based) uses the predetermined fire/decay trajectory and annual
+    burned-grade value.
     """
 
     if cohort.burn_rate == 0.0 or cohort.burned_value == 0.0:

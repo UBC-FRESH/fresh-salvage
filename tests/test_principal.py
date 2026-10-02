@@ -131,6 +131,55 @@ def test_principal_lp_uses_annual_coefficients_without_new_columns() -> None:
     assert built.model.getNumCol() == 2 * 3
 
 
+def test_fire_free_unit_decay_preserves_legacy_offer_coefficients() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="legacy-settings",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        green_volume_m3=100.0,
+        burned_volume_m3=10.0,
+        cashflow=1_472.5,
+        burned_value=1_000.0,
+        burn_rate=0.0,
+        burned_grade_mix=(1.0, 0.0, 0.0, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+        green_stumpage_rate=15.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+    )
+
+    coefficients = principal._principal_offer_coefficients(cohort, 3, 1.0)
+
+    assert coefficients.annual_burned_volume_m3 == pytest.approx((10.0, 10.0, 10.0))
+    assert coefficients.annual_offer == pytest.approx((1472.5, 1472.5, 1472.5))
+    assert coefficients.annual_burn_loss == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_unit_decay_still_accumulates_new_fire_in_offer_coefficients() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="unit-decay-fire",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        green_volume_m3=100.0,
+        burned_volume_m3=10.0,
+        cashflow=1_472.5,
+        burned_value=1_000.0,
+        burn_rate=0.1,
+        burned_grade_mix=(1.0, 0.0, 0.0, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+        green_stumpage_rate=15.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+    )
+
+    coefficients = principal._principal_offer_coefficients(cohort, 3, 1.0)
+
+    assert coefficients.annual_burned_volume_m3 == pytest.approx((10.0, 20.0, 29.0))
+    assert coefficients.annual_burn_loss == pytest.approx((0.0, 0.0, 0.0))
+
+
 def _fractions(result):
     return {
         (offer.cohort_id, offer.year): offer.offer_fraction for offer in result.offers
