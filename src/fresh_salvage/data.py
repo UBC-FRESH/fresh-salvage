@@ -80,6 +80,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -143,6 +144,52 @@ BURNED_GRADE_TRANSITION = {
     "Sawlog": {"Peeler": 0.00, "Sawlog": 0.80, "Pulpwood": 0.20},
     "Pulpwood": {"Peeler": 0.0, "Sawlog": 0.0, "Pulpwood": 1.0},
 }
+GRADE_ORDER = ("Peeler", "Sawlog", "Pulpwood")
+
+
+def annual_grade_mix(
+    initial_mix: Mapping[str, float], horizon: int
+) -> tuple[tuple[float, ...], ...]:
+    """Return predetermined annual grade shares from an initial mix.
+
+    The first returned mix is the supplied burned inventory composition. Each
+    following mix applies ``BURNED_GRADE_TRANSITION`` once. The result is a
+    tuple in canonical ``GRADE_ORDER`` order so model coefficients can be
+    calculated without adding grade-selective LP decisions.
+    """
+
+    if horizon <= 0:
+        raise ValueError("horizon must be positive")
+    current = np.array([float(initial_mix[grade]) for grade in GRADE_ORDER])
+    total = float(current.sum())
+    if total <= 0.0:
+        raise ValueError("initial grade mix must have positive total share")
+    current /= total
+    transition = np.array(
+        [
+            [BURNED_GRADE_TRANSITION[input_grade][output_grade] for output_grade in GRADE_ORDER]
+            for input_grade in GRADE_ORDER
+        ],
+        dtype=float,
+    )
+    mixes: list[tuple[float, ...]] = []
+    for _ in range(horizon):
+        mixes.append(tuple(float(value) for value in current))
+        current = current @ transition
+    return tuple(mixes)
+
+
+def weighted_grade_price(
+    grade_mix: tuple[float, ...], prices: Mapping[str, float]
+) -> float:
+    """Return a price weighted by a canonical annual grade mix."""
+
+    return float(
+        sum(
+            share * float(prices[grade])
+            for share, grade in zip(grade_mix, GRADE_ORDER, strict=True)
+        )
+    )
 
 # Species grading splits (green volume shares per market group).
 SPECIES_GRADE_SPLIT = {
@@ -820,6 +867,7 @@ __all__ = [
     "BASE_COLUMNS",
     "BURNED_GRADE_COLUMNS",
     "BURNED_GRADE_TRANSITION",
+    "GRADE_ORDER",
     "BURNED_HARVEST_COST",
     "BURNED_PRICE_DISCOUNT",
     "BURNED_PRICES",
@@ -849,7 +897,9 @@ __all__ = [
     "UNKNOWN_SEVERITY_LABEL",
     "UNKNOWN_SPECIES_GROUP",
     "development_types_from_frame",
+    "annual_grade_mix",
     "ingest",
     "species_group",
     "stands_from_frame",
+    "weighted_grade_price",
 ]

@@ -431,6 +431,22 @@ def test_burned_grade_transition(tmp_path: Path) -> None:
     assert cedar["B_Cedar_Sawlog_Vol"] == pytest.approx(40.572)
 
 
+def test_annual_grade_mix_uses_initial_inventory_then_transitions() -> None:
+    initial = {"Peeler": 0.2, "Sawlog": 0.6, "Pulpwood": 0.2}
+    mixes = data.annual_grade_mix(initial, horizon=3)
+
+    assert mixes[0] == pytest.approx((0.2, 0.6, 0.2))
+    expected_year_2 = tuple(
+        sum(initial[input_grade] * data.BURNED_GRADE_TRANSITION[input_grade][output_grade]
+            for input_grade in data.GRADE_ORDER)
+        for output_grade in data.GRADE_ORDER
+    )
+    assert mixes[1] == pytest.approx(expected_year_2)
+    assert all(sum(mix) == pytest.approx(1.0) for mix in mixes)
+    assert mixes[2][0] <= mixes[1][0]
+    assert mixes[2][2] >= mixes[1][2]
+
+
 def test_other_species_volume(tmp_path: Path) -> None:
     _, output = _run_ingest(tmp_path, make_synthetic_frame())
 
