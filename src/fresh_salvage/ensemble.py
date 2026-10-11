@@ -1,4 +1,4 @@
-"""Scenario-ensemble driver: parallel rolling-horizon runs over a grid.
+"""Scenario-ensemble driver: grid runs and adaptive binary searches.
 
 Thesis-scale sensitivity analysis runs one full rolling-horizon coupled run
 per scenario, where a scenario is one point of a cartesian grid over named
@@ -9,7 +9,8 @@ config field names (no positional ambiguity), the driver-owned fields
 ``run_id``/``output_root`` are reserved, ``bridge_path`` is reserved as an
 axis (every scenario is bound to the once-prebuilt shared bridge), and every
 grid-shape violation fails fast with a structured :class:`EnsembleError`
-code before any work starts.
+ code before any work starts. Binary-search mode evaluates endpoint checks and
+ dependent midpoints sequentially, using burned salvage as its flip metric.
 
 Isolation model
 ---------------
@@ -24,8 +25,10 @@ every scenario then points at that already-derived bridge, which
 ``resolved_bridge_path`` returns as-is — the bridge is strictly read-only
 during the parallel phase and there is no write contention. The pool uses
 the ``spawn`` multiprocessing context: workers start from a clean
-interpreter (no inherited model state, no fork-with-threads hazards) and
-inherit ``PYTHONPATH``, which the ws3 dependency requires.
+interpreter (no inherited model state, no fork-with-threads hazards). Since
+os.environ is not inherited with spawn, the parent passes the required
+``PYTHONPATH`` entries via the worker payload so ws3 and femic remain
+importable in workers.
 
 Failure semantics
 -----------------
@@ -45,6 +48,8 @@ import hashlib
 import itertools
 import json
 import multiprocessing
+import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -56,6 +61,7 @@ from pydantic import ValidationError
 from fresh_salvage import rh, ws3
 from fresh_salvage.models import (
     ArtifactLayout,
+    BinarySearchResult,
     EnsembleConfig,
     EnsembleManifest,
     EnsembleResult,
@@ -173,26 +179,41 @@ def run_ensemble(config: EnsembleConfig, verbose: bool = False) -> EnsembleResul
     scenarios_path = layout.data_path(f"{ensemble_slug}-scenarios", ext="jsonl")
     manifest_path = layout.manifest_path(f"{ensemble_slug}-ensemble-manifest")
 
-    specs = expand_scenarios(config)
+    if config.binary_search is not None and config.max_workers != 1:
+        raise EnsembleError(
+            "ensemble_binary_parallel",
+            "binary_search requires max_workers: 1 because each midpoint depends "
+            "on the previous probe",
+        )
+    specs = (
+        [_binary_spec(config, config.binary_search.lower)]
+        if config.binary_search is not None
+        else expand_scenarios(config)
+    )
     # Digest the grid config and input tables BEFORE the bridge prebuild so a
     # missing input fails fast (ensemble_input_missing) without paying for a
     # bridge rebuild.
     source_checksums = _provenance_checksums(config, specs)
     bridge = _prebuild_bridge(config, specs[0])
     source_checksums.update(_bridge_checksums(bridge))
-    payloads = [_scenario_payload(config, spec, bridge) for spec in specs]
-
-    if config.max_workers == 1:
-        # Sequential in-process profile (debug/test): same worker function,
-        # same failure-capture semantics, no subprocess boundary.
-        records = [
-            ScenarioRecord.model_validate(_run_scenario_worker(payload, verbose=verbose))
-            for payload in payloads
-        ]
+    binary_search_result = None
+    if config.binary_search is not None:
+        records, binary_search_result = _run_binary_search(config, bridge, verbose=verbose)
     else:
-        records = _run_parallel(
-            specs, payloads, max_workers=config.max_workers, verbose=verbose
-        )
+        payloads = [_scenario_payload(config, spec, bridge) for spec in specs]
+        if config.max_workers == 1:
+            # Sequential in-process profile (debug/test): same worker function,
+            # same failure-capture semantics, no subprocess boundary.
+            records = [
+                ScenarioRecord.model_validate(
+                    _run_scenario_worker(payload, verbose=verbose)
+                )
+                for payload in payloads
+            ]
+        else:
+            records = _run_parallel(
+                specs, payloads, max_workers=config.max_workers, verbose=verbose
+            )
     succeeded = sum(record.status != "failed" for record in records)
     failed = len(records) - succeeded
     status = "ok" if failed == 0 else ("failed" if succeeded == 0 else "partial")
@@ -214,6 +235,7 @@ def run_ensemble(config: EnsembleConfig, verbose: bool = False) -> EnsembleResul
         wall_seconds=wall_seconds,
         source_sha256=source_checksums,
         scenarios=records,
+        binary_search_result=binary_search_result,
         config=config.model_dump(mode="json"),
     )
     manifest.write_json(manifest_path)
@@ -227,8 +249,103 @@ def run_ensemble(config: EnsembleConfig, verbose: bool = False) -> EnsembleResul
         max_workers=config.max_workers,
         wall_seconds=wall_seconds,
         scenarios=records,
+        binary_search_result=binary_search_result,
         scenarios_path=scenarios_path,
         manifest_path=manifest_path,
+    )
+
+
+def _binary_spec(config: EnsembleConfig, value: float) -> ScenarioSpec:
+    """Build one validated scenario at a binary-search probe value."""
+
+    search = config.binary_search
+    if search is None:  # pragma: no cover - guarded by callers
+        raise EnsembleError("ensemble_binary_missing", "binary_search is not configured")
+    field_names = set(RHRunConfig.model_fields)
+    _require_scenario_field(search.axis, field_names, origin="binary_search")
+    for key in sorted(search.fixed):
+        _require_scenario_field(
+            key,
+            field_names,
+            origin="binary_search.fixed",
+            reserved=RESERVED_SCENARIO_FIELDS + RESERVED_AXIS_FIELDS,
+        )
+    overrides = {**search.fixed, search.axis: value}
+    name = _scenario_name(overrides)
+    try:
+        run_config = RHRunConfig(
+            run_id=f"{config.ensemble_id}-{name}",
+            output_root=Path(config.output_root) / name,
+            **{**config.base, **overrides},
+        )
+    except ValidationError as exc:
+        raise EnsembleError(
+            "ensemble_scenario_invalid",
+            f"scenario {name!r} does not form a valid RHRunConfig: {exc}",
+        ) from exc
+    return ScenarioSpec(name=name, overrides=overrides, run_config=run_config)
+
+
+def _run_binary_search(
+    config: EnsembleConfig, bridge: Path, *, verbose: bool
+) -> tuple[list[ScenarioRecord], BinarySearchResult]:
+    """Run endpoint checks and adaptive midpoint probes in ascending order."""
+
+    search = config.binary_search
+    if search is None:  # pragma: no cover - guarded by callers
+        raise EnsembleError("ensemble_binary_missing", "binary_search is not configured")
+
+    records: list[ScenarioRecord] = []
+
+    def probe(value: float) -> float:
+        spec = _binary_spec(config, value)
+        payload = _scenario_payload(config, spec, bridge)
+        record = ScenarioRecord.model_validate(
+            _run_scenario_worker(payload, verbose=verbose)
+        )
+        records.append(record)
+        if record.status == "failed" or record.metric_value is None:
+            raise EnsembleError(
+                "ensemble_binary_probe_failed",
+                f"binary-search probe {spec.name!r} failed: "
+                f"{record.error_code or 'missing metric'}",
+            )
+        return record.metric_value
+
+    lower_metric = probe(search.lower)
+    upper_metric = probe(search.upper)
+    if lower_metric > search.threshold:
+        raise EnsembleError(
+            "ensemble_binary_lower_active",
+            f"lower bound {search.lower} already exceeds threshold "
+            f"{search.threshold} ({lower_metric})",
+        )
+    if upper_metric <= search.threshold:
+        raise EnsembleError(
+            "ensemble_binary_upper_inactive",
+            f"upper bound {search.upper} does not exceed threshold "
+            f"{search.threshold} ({upper_metric})",
+        )
+
+    lower, upper = search.lower, search.upper
+    midpoint_probes = 0
+    for _ in range(search.iterations):
+        if search.tolerance is not None and upper - lower <= search.tolerance:
+            break
+        midpoint = (lower + upper) / 2.0
+        metric = probe(midpoint)
+        midpoint_probes += 1
+        if metric > search.threshold:
+            upper = midpoint
+        else:
+            lower = midpoint
+    return records, BinarySearchResult(
+        lower=lower,
+        upper=upper,
+        bracket_width=upper - lower,
+        midpoint_probes=midpoint_probes,
+        tolerance=search.tolerance,
+        converged=search.tolerance is not None and upper - lower <= search.tolerance,
     )
 
 
@@ -321,6 +438,10 @@ def _scenario_payload(
         "name": spec.name,
         "overrides": spec.overrides,
         "run_config": run_config.model_dump(mode="json"),
+        # Pass PYTHONPATH entries so spawn workers can import ws3 and femic.
+        # os.environ is not inherited with spawn multiprocessing.
+        "pythonpath": os.environ.get("PYTHONPATH", ""),
+        "femic_src": os.environ.get("FEMIC_SRC", ""),
     }
 
 
@@ -372,8 +493,11 @@ def _run_scenario_worker(
 
     Module-level and pickle-friendly (spawn workers import it fresh). The
     worker owns its scenario output root exclusively; the shared bridge is
-    read-only.
+    read-only. PYTHONPATH and FEMIC_SRC are passed via the payload since
+    os.environ is not inherited with spawn multiprocessing.
     """
+    # Ensure ws3 and femic are on sys.path for spawn workers
+    _patch_pythonpath(payload)
 
     started = time.monotonic()
     run_config = RHRunConfig.model_validate(payload["run_config"])
@@ -399,9 +523,26 @@ def _run_scenario_worker(
         **record_fields,
         status=result.status,
         wall_seconds=result.wall_seconds,
+        metric_value=sum(result.decadal_burned_harvest_m3),
         manifest_path=result.manifest_path,
         steps_path=result.steps_path,
     ).model_dump(mode="json")
+
+
+def _patch_pythonpath(payload: dict[str, object]) -> None:
+    """Patch sys.path for spawn workers so ws3 and femic are importable.
+
+    When using spawn multiprocessing, workers start from a clean interpreter
+    that does not inherit sys.path or os.environ. The parent passes the
+    required paths via the payload.
+    """
+    femic_src = payload.get("femic_src", "") or os.environ.get("FEMIC_SRC", "")
+    ws3_path = payload.get("pythonpath", "") or os.environ.get("PYTHONPATH", "")
+    if femic_src and femic_src not in sys.path:
+        sys.path.insert(0, femic_src)
+    for path in ws3_path.split(os.pathsep):
+        if path and path not in sys.path:
+            sys.path.insert(0, path)
 
 
 def _provenance_checksums(

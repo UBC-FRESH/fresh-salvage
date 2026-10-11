@@ -46,9 +46,9 @@ base:
   burned_limit_annual_m3: null
 axes:
   # Principal/agent subsidy instrument ($ per m3 of burned volume salvaged).
-  subsidy_rate_per_m3: [0.0, 3.0]
+  subsidy_rate_per_m3: [23.6, 23.7, 23.8, 23.9, 24, 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8, 24.9, 25, 25.1, 30, 35, 40, 45, 50]
   # Future fire-pattern assumption: multiplier on every MFRI burn rate.
-  burn_rate_multiplier: [1.0, 2.0]
+  burn_rate_multiplier: [1.0]
 max_workers: 4
 output_root: outputs/ensemble_tsa29_smoke
 metadata:

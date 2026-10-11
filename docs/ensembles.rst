@@ -8,6 +8,25 @@ exists to run those scenarios in parallel. This page covers why the driver
 exists, the grid syntax, the parallelism and failure models, performance
 budgeting, and a worked subsidy flip-point sweep.
 
+One-at-a-Time Sensitivity
+-------------------------
+
+The Cartesian ensemble is useful when interactions between parameters are the
+question. For one-at-a-time analysis, use ``sensitivity-run``:
+
+.. code-block:: bash
+
+   fresh-salvage sensitivity-run examples/sensitivity_tsa29.yaml --json
+
+Each configured parameter is run in its own sweep while all other fields stay
+at their baseline values. The driver adds a baseline value when it is absent
+from a sweep, then writes ``reports/<id>-results.md``: a readable record of
+the effective baseline settings, every scenario and its status, the outcome at
+each tested value, and the signed change from that parameter's baseline. The
+underlying evidence remains in ``data/<id>-observations.jsonl`` and
+``data/<id>-comparisons.csv``; full provenance is written to the sensitivity
+manifest.
+
 Why Ensembles
 -------------
 
@@ -162,14 +181,17 @@ scenario):
 Worked Example: The Subsidy Flip-Point Sweep
 --------------------------------------------
 
-``examples/ensemble_flip_sweep.yaml`` reproduces the prescribed post-
-calibration sweep: ``subsidy_rate_per_m3`` in {0, 5, 8, 10, 12, 14, 15, 16,
-18, 20, 22, 25, 30} x ``burn_rate_multiplier`` in {0.0, 1.0} (26 scenarios,
-~2.5 minutes at ``max_workers: 64`` / ``workers: 1``):
+``examples/ensemble_flip_sweep.yaml`` performs an adaptive binary search for
+the fire-active subsidy flip, using ``subsidy_rate_per_m3`` in [20, 30] and
+at most eight midpoint iterations. Its ``tolerance: 0.5`` stops the search
+once the inactive/active subsidy bracket is no wider than $0.50/m3, so it can
+finish before the iteration cap. The final bracket is recorded in
+``binary_search_result`` in the JSON summary and ensemble manifest.
+``max_workers: 1`` is required because the search is adaptive:
 
 .. code-block:: bash
 
-   fresh-salvage ensemble-run examples/ensemble_flip_sweep.yaml --json
+   fresh-salvage ensemble-run examples/ensemble_flip_sweep.yaml --json --strict
 
 Reading the response curve. Join
 ``data/<ensemble>-scenarios.jsonl`` to each scenario's RH manifest (the

@@ -185,6 +185,18 @@ def _require_femic_bridge_writer() -> None:
         pytest.skip(f"femic bridge writer unavailable: {exc}")
 
 
+def test_femic_source_candidates_include_local_sibling_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sibling FEMIC checkout works without requiring FEMIC_SRC."""
+
+    monkeypatch.delenv("FEMIC_SRC", raising=False)
+    candidates = ws3._femic_src_candidates()
+
+    assert candidates[0].name == "src"
+    assert candidates[0].parent.name == "femic"
+
+
 def _write_synthetic_stage1(tmp_path: Path) -> Path:
     """Write a minimal femic stage-1 Woodstock package and return its directory.
 

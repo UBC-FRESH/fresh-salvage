@@ -241,25 +241,51 @@ def _split_theme_blocks(lan_text: str) -> list[tuple[str, list[str]]]:
     return blocks
 
 
+def _femic_src_candidates() -> list[Path]:
+    """Return FEMIC source roots in explicit-to-fallback search order."""
+
+    candidates = []
+    configured = os.environ.get("FEMIC_SRC")
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    # Support the common sibling-checkout layout used for local development:
+    # ``<workspace>/femic`` beside ``<workspace>/fresh-salvage``.
+    candidates.append(Path(__file__).resolve().parents[3] / "femic" / "src")
+    candidates.append(FEMIC_SRC_ROOT)
+
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
 def _load_femic_bridge_writer() -> object:
-    """Import femic's stage-2 Woodstock section writer, lazily extending sys.path.
+    """Import femic's stage-2 writer from an available source checkout.
 
     The femic repository uses a src layout and is not a fresh-salvage install
-    dependency; when a plain import fails, the ``FEMIC_SRC`` environment
-    variable (falling back to :data:`FEMIC_SRC_ROOT`) is inserted into
-    ``sys.path`` before retrying. Raises ``WS3Error`` when femic's writer
-    cannot be imported at all.
+    dependency. ``FEMIC_SRC`` takes precedence, followed by a sibling local
+    checkout and the shared-server default. Raises ``WS3Error`` when femic's
+    writer cannot be imported from any candidate.
     """
 
-    try:
-        from femic.ws3_bridge import build_ws3_sections_from_femic_woodstock
+    candidates = _femic_src_candidates()
+    for femic_src in reversed(candidates):
+        if femic_src.is_dir() and str(femic_src) not in sys.path:
+            sys.path.insert(0, str(femic_src))
 
-        return build_ws3_sections_from_femic_woodstock
-    except ImportError:
-        pass
-    femic_src = Path(os.environ.get("FEMIC_SRC", str(FEMIC_SRC_ROOT)))
-    if femic_src.is_dir() and str(femic_src) not in sys.path:
-        sys.path.insert(0, str(femic_src))
+    # A regular femic installation can be present without the bridge writer.
+    # Extend the package path with every candidate so an installed package
+    # cannot shadow a source-tree submodule.
+    loaded_femic = sys.modules.get("femic")
+    if loaded_femic is not None:
+        search_path = getattr(loaded_femic, "__path__", None)
+        if search_path is not None:
+            for femic_src in reversed(candidates):
+                package_path = femic_src / "femic"
+                if package_path.is_dir() and str(package_path) not in search_path:
+                    search_path.insert(0, str(package_path))
     try:
         from femic.ws3_bridge import build_ws3_sections_from_femic_woodstock
 
@@ -268,8 +294,8 @@ def _load_femic_bridge_writer() -> object:
         raise WS3Error(
             "femic_import_failed",
             "femic's WS3 bridge writer is required to rebuild the no-LU bridge; "
-            "add the femic src directory to PYTHONPATH (e.g. "
-            f"PYTHONPATH={FEMIC_SRC_ROOT}): {exc}",
+            "set FEMIC_SRC to the femic src directory; searched "
+            f"{', '.join(str(path) for path in candidates)}: {exc}",
         ) from exc
 
 

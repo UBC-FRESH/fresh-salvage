@@ -1,0 +1,38 @@
+# One-at-a-time sensitivity analysis. Each parameter is swept independently;
+# all other values remain at their baseline values.
+sensitivity_id: tsa29-sensitivity
+base:
+  stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
+  yields_path: /home/xuyunhao/projects/salvage_harvesting_model/femic-tsa29-instance/output/woodstock_tsa29_validated/woodstock_yields.csv
+  bridge_path: /home/xuyunhao/projects/salvage_harvesting_model/femic-tsa29-instance/output/woodstock_tsa29_validated/ws3_bridge
+  base_year: 2025
+  horizon: 15
+  period_length: 10
+  steps: 10
+  workers: 1
+  decay_rate: 0.85
+  discount_rate: 0.03
+  subsidy_rate_per_m3: 3.0
+  burn_rate_multiplier: 1.0
+  burned_harvest_cost: 56.0
+parameters:
+  burn_rate_multiplier: [0.0, 0.5]
+  decay_rate: [0.5, 0.7]
+  discount_rate: [0.0, 0.03]
+  # Salvage-operation cost ($/m3): calibrated baseline, then +20% and +40%.
+  # This is the marginal cost of harvesting burned wood, so its flip-point
+  # rows show the added subsidy needed to keep salvage privately viable.
+  burned_harvest_cost: [56.0, 67.2, 78.4]
+# Independently locate the subsidy flip point for every non-subsidy setting
+# above. These searches are sequential and add up to eight midpoint RH runs
+# plus two endpoint checks per setting.
+flip_point_search:
+  axis: subsidy_rate_per_m3
+  lower: 20.0
+  upper: 30.0
+  iterations: 8
+  tolerance: 0.5
+  threshold: 0.0
+  metric: total_burned_harvest_m3
+max_workers: 4
+output_root: outputs/sensitivity_tsa29

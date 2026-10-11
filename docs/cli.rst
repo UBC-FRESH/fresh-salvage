@@ -419,6 +419,14 @@ Config (``EnsembleConfig``):
      - Named ``RHRunConfig`` fields mapped to value lists; the scenario
        grid is the cartesian product (empty axes = one ``baseline``
        scenario). ``bridge_path`` is reserved as an axis.
+   * - ``binary_search``
+     - ``null``
+     - Alternative to ``axes``: sequentially locates the lowest axis value
+       whose metric exceeds its threshold. ``iterations`` is the maximum
+       midpoint probes; optional positive ``tolerance`` stops early once the
+       inactive/active bracket is no wider than that value. The final bracket
+       is recorded as ``binary_search_result`` in the JSON summary and
+       manifest. Requires ``max_workers: 1``.
    * - ``max_workers``
      - 4
      - Concurrent scenario processes (1 = sequential in-process debug
@@ -457,6 +465,40 @@ shared bridge under ``<output_root>/derived/ws3_bridge_no_lu``, and
 the full per-scenario rolling-horizon artifact set under
 ``<output_root>/<scenario>/``. See :doc:`ensembles` for the parallelism
 model, performance budgets, and a worked sweep.
+
+sensitivity-run
+---------------
+
+Run one-at-a-time sensitivity sweeps and compare rolling-horizon outputs.
+
+.. code-block:: bash
+
+   fresh-salvage sensitivity-run examples/sensitivity_tsa29.yaml [--json] [--strict]
+
+Config (``SensitivityConfig``):
+
+- ``sensitivity_id`` — analysis identifier.
+- ``base`` — shared ``RHRunConfig`` fields. ``run_id`` and ``output_root``
+  are assigned by the driver; ``bridge_path`` must be provided here.
+- ``parameters`` — mapping of ``RHRunConfig`` field names to value lists.
+   Each parameter is run independently and the baseline value is added when
+   absent.
+- ``flip_point_search`` — optional adaptive ``subsidy_rate_per_m3`` search
+  run once for every setting of each non-subsidy parameter. It uses the same
+  ``lower``, ``upper``, ``iterations``, ``tolerance``, ``threshold``, and
+  ``metric`` fields as an ensemble binary search. These searches are
+  sequential regardless of ``max_workers``.
+- ``max_workers`` — concurrent scenarios within each parameter sweep.
+- ``output_root`` — root for sensitivity outputs and per-parameter runs.
+
+Artifacts include ``reports/<id>-results.md`` with the effective settings,
+examined scenarios, outcomes, and signed baseline changes;
+``data/<id>-observations.jsonl`` with scenario metrics;
+``data/<id>-comparisons.csv`` with baseline/range/direction analysis; and
+when configured, ``data/<id>-flip-points.csv`` with the inactive/active
+subsidy bracket for each non-subsidy setting; and
+``manifests/<id>-sensitivity-manifest.json``. ``--strict`` returns exit code 1
+when any scenario fails.
 
 export
 ------

@@ -96,6 +96,11 @@ Documentation Map
    * - :doc:`ensembles`
      - How do I run scenario grids in parallel, what do failures mean, and
        how do I budget a large sweep?
+   * - :doc:`flip_point_search`
+     - How does the adaptive subsidy flip-point search work, and how do I run
+       and interpret it?
+   * - :doc:`sensitivity_report`
+     - What does the sensitivity report contain, and where is its evidence?
    * - :doc:`architecture`
      - How are the modules organized, what are the design invariants, and
        what do the forestry acronyms mean?
@@ -120,6 +125,8 @@ authoritative calibration and validation records are
    model_semantics
    cli
    ensembles
+   flip_point_search
+   sensitivity_report
    architecture
    validation
    development
