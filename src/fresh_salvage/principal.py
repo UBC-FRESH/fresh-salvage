@@ -35,9 +35,11 @@ parses, at the boundary:
   Phase 2a stands of the cohort's development type (stratum
   ``{bec}_{species}`` -> ``{species_group}_{BEC}``);
 - ``cashflow[c]`` (stumpage net of subsidy, rates from the configured
-  ``economics`` surface, defaulting to the calibrated ``data.py`` constants)
-  and ``burned_value[c]`` (burned volume priced at the DT's volume-weighted
-  average burned price);
+   ``economics`` surface, defaulting to the calibrated ``data.py`` constants)
+   and ``burned_value[c]`` (burned volume priced at the DT's initial
+   volume-weighted burned-grade mix). The expected burn-loss coefficient uses
+   that mix in year 1 and applies the configured grade transition once per
+   later year; the mix is predetermined and independent of offer decisions;
 - ``burn_rate[c] = 1 / MFRI[bec_zone]`` from ``fire.py``.
 
 Variables (both continuous in ``[0, 1]``):
@@ -103,9 +105,12 @@ from fresh_salvage import fire
 from fresh_salvage.data import (
     BURNED_GRADE_COLUMNS,
     BURNED_PRICE_DISCOUNT,
+    GRADE_ORDER,
     GREEN_PRICES,
     SPECIES_GROUP_MAP,
     UNKNOWN_SPECIES_GROUP,
+    annual_grade_mix,
+    weighted_grade_price,
 )
 from fresh_salvage.models import (
     ArtifactLayout,
@@ -150,6 +155,8 @@ class PrincipalCohort:
     cashflow: float
     burned_value: float
     burn_rate: float
+    burned_grade_mix: tuple[float, ...] | None = None
+    burned_grade_prices: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -483,14 +490,29 @@ def _expected_burn_losses(
     """Return ``(year_index, expected_loss)`` pairs for one cohort.
 
     The expected loss charged when the cohort is still unoffered in year
-    ``y`` (1-based) is ``burn_rate * burned_value * (1 - decay_rate**(y-1))``.
+    ``y`` (1-based) uses the annual predetermined burned-grade value and is
+    ``burn_rate * annual_burned_value[y] * (1 - decay_rate**(y-1))``.
     """
 
     if cohort.burn_rate == 0.0 or cohort.burned_value == 0.0:
         return []
+    burned_values = _annual_burned_values(cohort, horizon)
     return [
-        (year, cohort.burn_rate * cohort.burned_value * (1.0 - decay_rate**year))
+        (year, cohort.burn_rate * burned_values[year] * (1.0 - decay_rate**year))
         for year in range(horizon)
+    ]
+
+
+def _annual_burned_values(cohort: PrincipalCohort, horizon: int) -> list[float]:
+    """Return burned values under the predetermined annual grade mix."""
+
+    if cohort.burned_grade_mix is None or cohort.burned_grade_prices is None:
+        return [cohort.burned_value] * horizon
+    initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
+    prices = dict(zip(GRADE_ORDER, cohort.burned_grade_prices, strict=True))
+    return [
+        cohort.burned_volume_m3 * weighted_grade_price(mix, prices)
+        for mix in annual_grade_mix(initial_mix, horizon)
     ]
 
 
@@ -516,7 +538,7 @@ def _development_type_economics(
     *,
     green_prices: dict[str, float] | None = None,
     burned_price_discount: float | None = None,
-) -> dict[str, dict[str, float]]:
+) -> dict[str, dict[str, object]]:
     """Aggregate the stands table into per-development-type burned shares.
 
     Returns ``{development_type: {"burn_share": ..., "burned_price": ...}}``
@@ -548,19 +570,46 @@ def _development_type_economics(
             f"stands table is missing required columns: {sorted(missing)}",
         )
 
-    economics: dict[str, dict[str, float]] = {}
+    economics: dict[str, dict[str, object]] = {}
     for development_type, group in frame.groupby("development_type", sort=True):
         green = float(group["Total_Green_Vol"].sum())
         if green <= 0.0:
             continue
         burned = float(group["Total_Burned_Vol"].sum())
         burned_value = 0.0
+        grade_volumes = {grade: 0.0 for grade in GRADE_ORDER}
+        grade_values = {grade: 0.0 for grade in GRADE_ORDER}
         for column in BURNED_GRADE_COLUMNS:
             price_key = column[len("B_") : -len("_Vol")]
-            burned_value += float(group[column].sum()) * burned_prices[price_key]
+            volume = float(group[column].sum())
+            price = burned_prices[price_key]
+            burned_value += volume * price
+            if price_key == "Other":
+                grade = "Other"
+            else:
+                suffix = price_key.rsplit("_", 1)[1]
+                grade = {suffix_name: grade_name for grade_name, suffix_name in {
+                    "Peeler": "Peelers",
+                    "Sawlog": "Sawlog",
+                    "Pulpwood": "Pulpwood",
+                }.items()}[suffix]
+            grade_volumes[grade] += volume
+            grade_values[grade] += volume * price
+        grade_mix = tuple(
+            grade_volumes[grade] / burned if burned > 0.0 else 0.0
+            for grade in GRADE_ORDER
+        )
+        grade_prices = tuple(
+            grade_values[grade] / grade_volumes[grade]
+            if grade_volumes[grade] > 0.0
+            else 0.0
+            for grade in GRADE_ORDER
+        )
         economics[str(development_type)] = {
             "burn_share": burned / green,
             "burned_price": burned_value / burned if burned > 0.0 else 0.0,
+            "burned_grade_mix": grade_mix,
+            "burned_grade_prices": grade_prices,
         }
     return economics
 
@@ -709,6 +758,8 @@ def _parse_are_cohorts(
                 ),
                 burned_value=burned_volume_m3 * price_by_dt[development_type]["burned_price"],
                 burn_rate=burn_rate,
+                burned_grade_mix=price_by_dt[development_type]["burned_grade_mix"],
+                burned_grade_prices=price_by_dt[development_type]["burned_grade_prices"],
             )
         )
     if not cohorts:

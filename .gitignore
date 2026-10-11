@@ -26,6 +26,7 @@ tmp/
 local/
 data/private/
 outputs/
+src/fresh_salvage/data_backup.py
 
 # Editors and OS
 .vscode/

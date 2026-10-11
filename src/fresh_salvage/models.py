@@ -759,6 +759,7 @@ class AgentYearVolumes(BaseModel):
     burn_influx_m3: float = Field(ge=0.0)
     live_volume_m3: float = Field(ge=0.0)
     burned_volume_m3: float = Field(ge=0.0)
+    burned_grade_volume_m3: dict[str, float] = Field(default_factory=dict)
 
 
 class AgentManifest(BaseModel):
@@ -835,6 +836,10 @@ class AgentResult(BaseModel):
                     "burn_influx": round(volumes.burn_influx_m3, 2),
                     "live_end": round(volumes.live_volume_m3, 2),
                     "burned_end": round(volumes.burned_volume_m3, 2),
+                    "burned_grades": {
+                        grade: round(volume, 2)
+                        for grade, volume in sorted(volumes.burned_grade_volume_m3.items())
+                    },
                 }
                 for volumes in self.per_year_volumes
             },
