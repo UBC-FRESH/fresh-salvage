@@ -5,6 +5,13 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Opened Phase 8, the single-pass 100-year planning baseline (parent issue
+  #33, child issues #34-#39, branch `feature/p8-single-pass-baseline`, built
+  on PR #32). Single pass solves the coupled WS3 -> principal -> agent ->
+  fire pipeline once at t=0 over the full run, as the baseline that `rh-run`
+  (decadal re-planning) is compared against. The design contract (decisions
+  D1-D9, config surface, artifact contract, test plan, risks) is
+  `planning/phase8-single-pass-baseline.md`.
 - Fixed CI test collection: `tests/test_ensemble.py` imported `Result` from
   `click.testing`, and `click` is not a declared dependency (recent Typer
   bundles its own copy of click), so collection failed with
