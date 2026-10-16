@@ -5,6 +5,29 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 8 P8.1 (issue #34): added year-indexed WS3 ceilings for multi-period
+  plans.
+  - `rh.schedule_cohort_period_volumes` maps the `cc` volume of every
+    implemented WS3 period back onto the t=0 cohorts. An untouched cohort
+    of t=0 age `a0` appears in period `p` at age `a0 + L*(p-1)`, on the
+    age-smashing midpoint lattice. This was verified against ws3 aging
+    (`+period_length` per period, no clamp) and on the local TSA29 step-01
+    schedule, where all 557 period-1..10 rows map.
+  - A clear-cut resets age to 0 (`*ACTION cc Y`), so regenerated stands
+    sit on the `0 (mod L)` lattice. A harvest of a regenerated stand
+    inside the implemented periods fails fast
+    (`rh_schedule_regenerated_harvest`); on TSA29 the first one is in
+    period 12. Unknown cohorts, off-lattice rows, ambiguous lattice
+    configurations, and off-lattice state ages also fail fast.
+  - `rh.annual_ceiling_matrix` splits each period's volume into annual
+    ceilings.
+  - `principal.build_principal_lp` / `solve_principal` now accept, per
+    cohort, either a scalar ceiling (broadcast, the existing RH path) or a
+    sequence of exactly `horizon` per-year ceilings.
+  - RH still uses `_period1_cohort_volumes` and scalar ceilings. Its LP is
+    bit-identical: a scalar-vs-broadcast equivalence test covers this, and
+    the LP arrays and solution were also checked against the `9b5a0a0`
+    principal module.
 - Opened Phase 8, the single-pass 100-year planning baseline (parent issue
   #33, child issues #34-#39, branch `feature/p8-single-pass-baseline`, built
   on PR #32). Single pass solves the coupled WS3 -> principal -> agent ->

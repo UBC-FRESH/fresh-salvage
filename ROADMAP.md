@@ -17,7 +17,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
-| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Active |
+| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Active (P8.1 complete) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -239,7 +239,7 @@ Parent issue: #33
 Branch: `feature/p8-single-pass-baseline` (built on PR #32,
 `fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
 
-Status: active
+Status: active (P8.1 complete)
 
 Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
 principal -> agent -> fire pipeline solved once at t=0 over the full run
@@ -250,7 +250,7 @@ not the value of information. Design contract (decisions D1-D9, config
 surface, artifact contract, test plan, risks):
 `planning/phase8-single-pass-baseline.md`.
 
-- [ ] P8.1 Schedule -> year-indexed ceiling matrix and per-year principal
+- [x] P8.1 Schedule -> year-indexed ceiling matrix and per-year principal
       ceilings (#34).
 - [ ] P8.2 Decadal growth-aware volume coefficients in principal and agent
       (#35).
