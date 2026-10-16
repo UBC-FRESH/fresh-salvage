@@ -5,6 +5,11 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Fixed CI test collection: `tests/test_ensemble.py` imported `Result` from
+  `click.testing`, and `click` is not a declared dependency (recent Typer
+  bundles its own copy of click), so collection failed with
+  `ModuleNotFoundError: No module named 'click'`. The import now comes from
+  `typer.testing`, and no dependency was added.
 - Fixed WS3 schedule row volumes double-counting duplicated groups (issue
   #31, branch `fix/schedule-group-volume-dedup`). `ws3._compile_schedule`
   attached the `compile_product` total of each `(period, dtype_key,
