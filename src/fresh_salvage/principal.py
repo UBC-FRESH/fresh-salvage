@@ -90,7 +90,9 @@ rounding of decision outputs, and zero offer rows are emitted explicitly.
 from __future__ import annotations
 
 import hashlib
+import math
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -125,6 +127,10 @@ from fresh_salvage.ws3 import normalize_status
 DEFAULT_DECAY_RATE = 0.85
 DEFAULT_AAC_ANNUAL_M3 = 2_937_509
 OFFER_REPORTING_TOLERANCE = 1e-9
+
+# Per cohort: one annual ceiling (broadcast to every LP year) or one ceiling
+# per LP year.
+CohortCeilings = Sequence[float | Sequence[float]]
 
 
 class PrincipalError(RuntimeError):
@@ -206,7 +212,7 @@ def build_principal_lp(
     aac_annual_m3: float = DEFAULT_AAC_ANNUAL_M3,
     decay_rate: float = DEFAULT_DECAY_RATE,
     burned_limit_annual_m3: float | None = None,
-    cohort_ceilings_m3: list[float] | None = None,
+    cohort_ceilings_m3: CohortCeilings | None = None,
 ) -> PrincipalLP:
     """Build the continuous principal offer LP as a HiGHS model.
 
@@ -214,11 +220,15 @@ def build_principal_lp(
     year), followed by all ``cum_offer[c, y]`` columns in the same order, so
     column indices are deterministic functions of cohort index and year.
 
-    ``cohort_ceilings_m3`` (optional) carries one annual green-volume ceiling
-    (m3/yr) per cohort — the rolling-horizon engine passes the WS3 period-1
-    decadal harvest split uniformly over the implemented years. Each ceiling
-    adds ``horizon`` rows ``green_volume_m3[c] * offer[c,y] <= ceiling[c]``
-    that augment (never replace) the global AAC row.
+    ``cohort_ceilings_m3`` (optional) carries, per cohort, either one annual
+    green-volume ceiling (m3/yr) broadcast to every LP year — the
+    rolling-horizon engine passes the WS3 period-1 decadal harvest split
+    uniformly over the implemented years — or a sequence of exactly
+    ``horizon`` per-year ceilings (the single-pass engine passes one WS3
+    period volume per decade, split per year). Each cohort adds ``horizon``
+    rows ``green_volume_m3[c] * offer[c,y] <= ceiling[c,y]`` that augment
+    (never replace) the global AAC row; a scalar and its broadcast sequence
+    build the identical LP.
     """
 
     if not cohorts:
@@ -240,19 +250,11 @@ def build_principal_lp(
             "principal_invalid_burned_limit",
             f"burned_limit_annual_m3 cannot be negative: {burned_limit_annual_m3}",
         )
-    if cohort_ceilings_m3 is not None:
-        if len(cohort_ceilings_m3) != len(cohorts):
-            raise PrincipalError(
-                "principal_invalid_cohort_ceilings",
-                f"cohort_ceilings_m3 covers {len(cohort_ceilings_m3)} cohorts but "
-                f"{len(cohorts)} were parsed",
-            )
-        for ceiling in cohort_ceilings_m3:
-            if ceiling < 0:
-                raise PrincipalError(
-                    "principal_invalid_cohort_ceilings",
-                    f"cohort ceiling cannot be negative: {ceiling}",
-                )
+    ceiling_matrix = (
+        None
+        if cohort_ceilings_m3 is None
+        else _parse_cohort_ceilings(cohort_ceilings_m3, len(cohorts), horizon)
+    )
 
     cohort_count = len(cohorts)
     years = range(horizon)
@@ -327,14 +329,14 @@ def build_principal_lp(
             burned_volumes,
         )
 
-    # ws3_ceiling[c,y]: green_volume_m3[c] * offer[c,y] <= cohort_ceilings_m3[c]
-    if cohort_ceilings_m3 is not None:
-        for c_index, ceiling in enumerate(cohort_ceilings_m3):
+    # ws3_ceiling[c,y]: green_volume_m3[c] * offer[c,y] <= ceiling_matrix[c,y]
+    if ceiling_matrix is not None:
+        for c_index, cohort_year_ceilings in enumerate(ceiling_matrix):
             coefficient = np.array([green_volumes[c_index]])
             for year in years:
                 model.addRow(
                     -highspy.kHighsInf,
-                    float(ceiling),
+                    float(cohort_year_ceilings[year]),
                     1,
                     np.array([column_grid[c_index, year]], dtype=np.int32),
                     coefficient,
@@ -350,7 +352,7 @@ def solve_principal(
     aac_annual_m3: float = DEFAULT_AAC_ANNUAL_M3,
     decay_rate: float = DEFAULT_DECAY_RATE,
     burned_limit_annual_m3: float | None = None,
-    cohort_ceilings_m3: list[float] | None = None,
+    cohort_ceilings_m3: CohortCeilings | None = None,
     run_id: str = "principal-solve",
 ) -> PrincipalResult:
     """Build and solve the principal LP; return the typed result.
@@ -477,6 +479,45 @@ def run_principal(config: PrincipalRunConfig) -> PrincipalResult:
     result.csv_path = csv_path
     result.manifest_path = manifest_path
     return result
+
+
+def _parse_cohort_ceilings(
+    cohort_ceilings_m3: CohortCeilings, cohort_count: int, horizon: int
+) -> np.ndarray:
+    """Parse per-cohort ceilings into a trusted ``(cohort_count, horizon)`` matrix.
+
+    A scalar entry is broadcast to every LP year (the rolling-horizon path);
+    a sequence entry must hold exactly ``horizon`` per-year ceilings. Any
+    count mismatch, negative, or NaN ceiling fails fast.
+    """
+
+    if len(cohort_ceilings_m3) != cohort_count:
+        raise PrincipalError(
+            "principal_invalid_cohort_ceilings",
+            f"cohort_ceilings_m3 covers {len(cohort_ceilings_m3)} cohorts but "
+            f"{cohort_count} were parsed",
+        )
+    rows: list[list[float]] = []
+    for c_index, ceiling in enumerate(cohort_ceilings_m3):
+        year_ceilings = (
+            [float(ceiling)] * horizon
+            if np.ndim(ceiling) == 0
+            else [float(value) for value in ceiling]
+        )
+        if len(year_ceilings) != horizon:
+            raise PrincipalError(
+                "principal_invalid_cohort_ceilings",
+                f"cohort {c_index} carries {len(year_ceilings)} per-year ceilings "
+                f"for a horizon of {horizon}",
+            )
+        invalid = [value for value in year_ceilings if math.isnan(value) or value < 0]
+        if invalid:
+            raise PrincipalError(
+                "principal_invalid_cohort_ceilings",
+                f"cohort {c_index} ceiling cannot be negative or NaN: {invalid[0]}",
+            )
+        rows.append(year_ceilings)
+    return np.array(rows, dtype=float).reshape(cohort_count, horizon)
 
 
 def _parse_offer_fraction(value: float, column: int) -> float:
@@ -893,6 +934,7 @@ def _sha256_file(path: Path) -> str:
 
 
 __all__ = [
+    "CohortCeilings",
     "DEFAULT_AAC_ANNUAL_M3",
     "DEFAULT_DECAY_RATE",
     "OFFER_REPORTING_TOLERANCE",

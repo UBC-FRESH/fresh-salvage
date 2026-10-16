@@ -508,3 +508,128 @@ def test_run_principal_end_to_end_writes_artifacts_and_manifest(tmp_path) -> Non
     assert manifest.source_sha256 == expected_checksums
     assert manifest.status == "optimal"
     assert manifest.run_id == "toy-e2e"
+
+
+# --- per-cohort per-year WS3 ceilings (Phase 8 P8.1) --------------------------
+
+
+def _economic_cohort(cohort_id: str, green_volume_m3: float) -> PrincipalCohort:
+    """Cohort with the full economic surface (fire, decay, grade-mix paths)."""
+
+    burned_volume_m3 = 0.1 * green_volume_m3
+    return PrincipalCohort(
+        cohort_id=cohort_id,
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=10.0,
+        green_volume_m3=green_volume_m3,
+        burned_volume_m3=burned_volume_m3,
+        cashflow=green_volume_m3 * 4.0,
+        burned_value=burned_volume_m3 * 30.0,
+        burn_rate=0.01,
+        burned_grade_mix=(0.1, 0.7, 0.2, 0.0),
+        burned_grade_prices=(60.0, 45.0, 20.0, 0.0),
+        green_stumpage_rate=4.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+    )
+
+
+def _lp_arrays(built: principal.PrincipalLP) -> dict[str, list[float]]:
+    """Every array that defines a built HiGHS LP, for exact comparison."""
+
+    lp = built.model.getLp()
+    return {
+        "col_cost": list(lp.col_cost_),
+        "col_lower": list(lp.col_lower_),
+        "col_upper": list(lp.col_upper_),
+        "row_lower": list(lp.row_lower_),
+        "row_upper": list(lp.row_upper_),
+        "a_start": list(lp.a_matrix_.start_),
+        "a_index": list(lp.a_matrix_.index_),
+        "a_value": list(lp.a_matrix_.value_),
+        "offset": [lp.offset_],
+    }
+
+
+def test_scalar_and_broadcast_ceilings_build_identical_lps() -> None:
+    # RH equivalence: the rolling-horizon engine passes one scalar per
+    # cohort; its per-year broadcast must build the bit-identical LP.
+    horizon = 10
+    cohorts = [_economic_cohort("a", 12_000.0), _economic_cohort("b", 7_500.0)]
+    scalar_ceilings = [400.0 / 3.0, 0.0]
+
+    scalar_lp = principal.build_principal_lp(
+        cohorts, horizon=horizon, aac_annual_m3=5_000.0, cohort_ceilings_m3=scalar_ceilings
+    )
+    broadcast_lp = principal.build_principal_lp(
+        cohorts,
+        horizon=horizon,
+        aac_annual_m3=5_000.0,
+        cohort_ceilings_m3=[(ceiling,) * horizon for ceiling in scalar_ceilings],
+    )
+
+    assert _lp_arrays(scalar_lp) == _lp_arrays(broadcast_lp)
+    assert scalar_lp.offer_columns == broadcast_lp.offer_columns
+
+
+def test_per_year_ceilings_set_one_row_bound_per_cohort_year() -> None:
+    horizon = 4
+    cohorts = [_economic_cohort("a", 1_000.0), _economic_cohort("b", 2_000.0)]
+    per_year = [(10.0, 20.0, 30.0, 40.0), (0.0, 5.0, 0.0, 5.0)]
+
+    built = principal.build_principal_lp(
+        cohorts, horizon=horizon, aac_annual_m3=1e9, cohort_ceilings_m3=per_year
+    )
+
+    # The ceiling rows are the last cohorts x horizon rows, cohort-major.
+    lp = built.model.getLp()
+    ceiling_bounds = list(lp.row_upper_)[-len(cohorts) * horizon :]
+    assert ceiling_bounds == [bound for row in per_year for bound in row]
+
+
+def test_per_year_ceilings_bind_each_year_in_the_solution() -> None:
+    horizon = 4
+    cohorts = [_cohort("a", green_volume_m3=1_000.0, cashflow=100.0)]
+    per_year = [(10.0, 0.0, 30.0, 40.0)]
+
+    result = principal.solve_principal(
+        cohorts, horizon=horizon, aac_annual_m3=1e9, cohort_ceilings_m3=per_year
+    )
+
+    offered = [volumes.green_volume_m3 for volumes in result.per_year_volumes]
+    assert offered == pytest.approx([10.0, 0.0, 30.0, 40.0], abs=TOLERANCE)
+
+
+def test_scalar_and_sequence_ceilings_may_mix_across_cohorts() -> None:
+    horizon = 3
+    cohorts = [
+        _cohort("a", green_volume_m3=100.0, cashflow=10.0),
+        _cohort("b", green_volume_m3=100.0, cashflow=10.0),
+    ]
+
+    result = principal.solve_principal(
+        cohorts, horizon=horizon, aac_annual_m3=1e9, cohort_ceilings_m3=[5.0, (1.0, 2.0, 3.0)]
+    )
+
+    offered = [volumes.green_volume_m3 for volumes in result.per_year_volumes]
+    assert offered == pytest.approx([6.0, 7.0, 8.0], abs=TOLERANCE)
+
+
+@pytest.mark.parametrize(
+    "ceilings",
+    [
+        [(1.0, 2.0)],  # too short for horizon 3
+        [(1.0, 2.0, 3.0, 4.0)],  # too long
+        [(1.0, -2.0, 3.0)],  # negative year
+        [(1.0, float("nan"), 3.0)],  # NaN year
+        [float("nan")],  # NaN scalar
+    ],
+)
+def test_malformed_per_year_ceilings_fail_fast(ceilings) -> None:
+    cohorts = [_cohort("a", green_volume_m3=100.0, cashflow=10.0)]
+
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal.build_principal_lp(cohorts, horizon=3, cohort_ceilings_m3=ceilings)
+
+    assert excinfo.value.code == "principal_invalid_cohort_ceilings"
