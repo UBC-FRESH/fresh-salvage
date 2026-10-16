@@ -2,8 +2,8 @@
 #
 # The search checks the inactive and active endpoints, then runs sequential
 # midpoint probes to find the lowest subsidy producing positive burned salvage.
-# It stops as soon as the inactive/active subsidy bracket is at most $0.50/m3,
-# or after eight midpoint probes as a safety cap. Each probe is a full
+# It stops as soon as the inactive/active subsidy bracket is at most $0.10/m3,
+# or after ten midpoint probes as a safety cap. Each probe is a full
 # rolling-horizon run. Binary search is necessarily sequential, so max_workers
 # must remain 1. Hold `workers` fixed:
 # WS3 step objectives shift slightly with worker count (±0.014%).
@@ -50,7 +50,7 @@ binary_search:
   metric: total_burned_harvest_m3
   fixed:
     burn_rate_multiplier: 1.0
-max_workers: 8
+max_workers: 1
 output_root: outputs/ensemble_flip_sweep
 metadata:
   description: Adaptive binary search for the subsidy at which burned salvage becomes positive; 100-year rolling-horizon probes.
