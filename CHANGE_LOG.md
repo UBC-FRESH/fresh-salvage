@@ -5,6 +5,38 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Fixed CI test collection: `tests/test_ensemble.py` imported `Result` from
+  `click.testing`, and `click` is not a declared dependency (recent Typer
+  bundles its own copy of click), so collection failed with
+  `ModuleNotFoundError: No module named 'click'`. The import now comes from
+  `typer.testing`, and no dependency was added.
+- Fixed WS3 schedule row volumes double-counting duplicated groups (issue
+  #31, branch `fix/schedule-group-volume-dedup`). `ws3._compile_schedule`
+  attached the `compile_product` total of each `(period, dtype_key,
+  age_class, harvest_action)` group to every row of that group. WS3 emits
+  one row per Model-I path, so a group split over several paths was counted
+  once per row. This inflated the RH per-cohort period-1 WS3 ceilings
+  (`rh._period1_cohort_volumes`) and the `ws3-run` / RH WS3 objective. Row
+  volumes are now the group volume apportioned by area share (exact, because
+  the rows share a development type and age). `compile_product` runs once
+  per group, and a zero-area group that still reports volume fails fast
+  (`ws3_schedule_volume_without_area`). Re-apportioning the local
+  100-year RH monotonicity-fix schedules gives these period-1 `cc` ceiling
+  sums:
+  - step 01: 5,108,975.6 -> 5,003,960.3 m3 (-2.06%); one cohort's ceiling
+    was doubled;
+  - step 10: 2,765,242.1 -> 2,565,864.6 m3 (-7.21%); again one doubled
+    cohort.
+
+  Across all periods, the summed schedule volume falls by 37.8% (step 01)
+  and 17.9% (step 10). A fresh 10-period `ws3-run` on the fixed code
+  reproduces the earlier schedule row-for-row. Its objective changes from
+  70,541,148.96 to 46,380,218.18 (0.85 x 54,564,962.6 m3), its per-period
+  volumes now sit inside the even-flow bands (period 10 drops from 34.5M m3
+  to 6.06M m3), and 84 duplicated groups now sum exactly to their group
+  totals. RH, ensemble, flip-point, and sensitivity results generated before
+  this fix (including the August 2026 runs) used inflated ceilings and are
+  superseded.
 - Added annual predetermined burned-grade mixes for the principal and agent
   coefficients. Year 1 uses the ingested burned-grade composition and each
   later year applies the configured downgrade-only transition once. Existing
