@@ -183,11 +183,20 @@ counts, solve seconds, objective). The derived bridge is materialized
 under ``<output_root>/derived/ws3_bridge_no_lu`` with the staged CSVs beside
 it (``<output_root>/derived/woodstock_no_lu_smashed``).
 
+``volume_m3`` is each row's own harvested ``totvol``. WS3 can emit several
+rows (one per Model-I path) for the same ``(period, dtype_key, age_class,
+harvest_action)`` group, and ``compile_product`` reports one total for that
+group, so the total is split across the group's rows by area share
+(``group_volume * area_ha / group_area``; exact, since the rows share a
+development type and age). Summing ``volume_m3`` over rows therefore never
+double-counts a group, and the manifest objective is ``utilization`` times
+that sum.
+
 Notable failure codes: ``ws3_bridge_missing``, ``ws3_bridge_incomplete``,
 ``ws3_import_failed``, ``femic_import_failed``, ``ws3_stage1_incomplete``,
 ``invalid_age_values``, ``invalid_area_values``, ``area_conservation_failed``,
 ``ws3_bridge_age_unsmashed``, ``ws3_action_absent``, ``ws3_solve_failed``,
-``ws3_solve_not_optimal``.
+``ws3_solve_not_optimal``, ``ws3_schedule_volume_without_area``.
 
 principal-run
 -------------

@@ -106,6 +106,11 @@ SCHEDULE_COLUMNS = (
     "volume_m3",
     "etype",
 )
+# ``ForestModel.compile_product`` filters on exactly these fields, so it
+# returns one total volume per group even when WS3 emits several schedule
+# rows (Model-I paths) for the same group.
+SCHEDULE_VOLUME_GROUP_COLUMNS = ("period", "dtype_key", "age_class", "harvest_action")
+ScheduleVolumeGroup = tuple[object, object, object, object]
 
 
 class WS3Error(RuntimeError):
@@ -908,6 +913,9 @@ def _compile_schedule(
 ) -> tuple[pd.DataFrame, float]:
     """Compile the optimal schedule, attach volumes, and return sorted records.
 
+    Each row's ``volume_m3`` is its own harvested ``totvol``: the group volume
+    from ``compile_product`` apportioned by the row's area share (see
+    ``_apportion_group_volumes``), so summing rows never double-counts a group.
     Returns ``(schedule, objective_value)`` where ``objective_value`` is the
     modeled objective: ``utilization`` times the sum of harvested ``totvol``.
     """
@@ -916,25 +924,11 @@ def _compile_schedule(
     # Apply the schedule to populate yield components for compile_product.
     model.apply_schedule(raw_schedule, compile_t_ycomps=True, compile_c_ycomps=True)
     schedule = pd.DataFrame(raw_schedule, columns=SCHEDULE_RAW_COLUMNS)
-    volumes = [
-        float(
-            model.compile_product(
-                int(period),
-                "totvol",
-                action,
-                [dtype_key],
-                int(age_class),
-                coeff=False,
-            )
-        )
-        for dtype_key, age_class, action, period in zip(
-            schedule["dtype_key"],
-            schedule["age_class"],
-            schedule["harvest_action"],
-            schedule["period"],
-        )
-    ]
-    schedule["volume_m3"] = volumes
+    group_volumes = {
+        group: _compile_group_volume(model, group)
+        for group in dict.fromkeys(_schedule_volume_groups(schedule))
+    }
+    schedule["volume_m3"] = _apportion_group_volumes(schedule, group_volumes)
     schedule["stratum"] = schedule["dtype_key"].map(_stratum_from_dtype_key)
     schedule["dtype_key"] = schedule["dtype_key"].map(_dtype_key_to_json)
     schedule["year"] = config.base_year + (schedule["period"] - 1) * config.period_length
@@ -945,6 +939,63 @@ def _compile_schedule(
     )
     objective_value = float(schedule["volume_m3"].sum()) * config.objective.utilization
     return schedule, objective_value
+
+
+def _schedule_volume_groups(schedule: pd.DataFrame) -> list[ScheduleVolumeGroup]:
+    """Return each raw schedule row's ``SCHEDULE_VOLUME_GROUP_COLUMNS`` key."""
+
+    return list(zip(*(schedule[column] for column in SCHEDULE_VOLUME_GROUP_COLUMNS)))
+
+
+def _compile_group_volume(model: object, group: ScheduleVolumeGroup) -> float:
+    """Return the total harvested ``totvol`` (m3) of one schedule group."""
+
+    period, dtype_key, age_class, action = group
+    return float(
+        model.compile_product(
+            int(period), "totvol", action, [dtype_key], int(age_class), coeff=False
+        )
+    )
+
+
+def _apportion_group_volumes(
+    schedule: pd.DataFrame, group_volumes: dict[ScheduleVolumeGroup, float]
+) -> list[float]:
+    """Split each group's total volume across its rows by area share.
+
+    ``compile_product`` returns one total per ``(period, dtype_key, age_class,
+    harvest_action)`` group, while WS3 may emit several rows (one per Model-I
+    path) for that group. Rows in a group share a development type and age,
+    hence per-hectare yield, so ``group_volume * row_area / group_area`` is each
+    row's exact volume and the rows sum back to the group total. A group with
+    no operated area gets zero volume; one that still reports volume is an
+    inconsistent WS3 state and fails fast.
+    """
+
+    row_groups = _schedule_volume_groups(schedule)
+    row_areas = [float(area) for area in schedule["area_ha"]]
+    group_areas: dict[ScheduleVolumeGroup, float] = {}
+    for group, area in zip(row_groups, row_areas):
+        group_areas[group] = group_areas.get(group, 0.0) + area
+
+    volume_without_area = [
+        group
+        for group, area in group_areas.items()
+        if area <= 0.0 and group_volumes[group] != 0.0
+    ]
+    if volume_without_area:
+        raise WS3Error(
+            "ws3_schedule_volume_without_area",
+            f"{len(volume_without_area)} WS3 schedule group(s) report harvested volume "
+            f"with no operated area; first: {volume_without_area[0]!r}",
+        )
+
+    return [
+        0.0
+        if group_areas[group] <= 0.0
+        else group_volumes[group] * area / group_areas[group]
+        for group, area in zip(row_groups, row_areas)
+    ]
 
 
 def _stratum_from_dtype_key(dtype_key: object) -> str:

@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fresh_salvage import fire, principal, rh
-from fresh_salvage.models import AgentDecisionRecord, RHRunConfig
+from fresh_salvage import fire, principal, rh, ws3
+from fresh_salvage.models import AgentDecisionRecord, RHRunConfig, WS3RunConfig
 
 STRATUM = "sbps_pli"
 CURVE_ID = 2921000
@@ -431,6 +431,73 @@ def test_inject_cohort_table_unknown_dtype_fails_fast() -> None:
         rh.inject_cohort_table(model, state)
 
     assert excinfo.value.code == "rh_state_dtype_unknown"
+
+
+# --- WS3 period-1 cohort ceilings --------------------------------------------
+
+
+class _DuplicatePathScheduleModel:
+    """ws3 ForestModel stand-in whose schedule splits one group over two paths.
+
+    ``compile_product`` returns the group total (summed area times yield), as
+    ws3 does, for every row of the group.
+    """
+
+    yield_m3_per_ha = 141.0
+
+    def __init__(self, raw_schedule: list[tuple]) -> None:
+        self.raw_schedule = raw_schedule
+
+    def compile_schedule(self, problem: object) -> list[tuple]:
+        return list(self.raw_schedule)
+
+    def apply_schedule(
+        self, schedule: list[tuple], compile_t_ycomps: bool, compile_c_ycomps: bool
+    ) -> None:
+        return None
+
+    def compile_product(
+        self,
+        period: int,
+        expr: str,
+        acode: str,
+        dtype_keys: list[tuple],
+        age: int,
+        coeff: bool = False,
+    ) -> float:
+        group_area = sum(
+            area
+            for dtype_key, row_age, area, action, row_period, _etype in self.raw_schedule
+            if (dtype_key, row_age, action, row_period) == (dtype_keys[0], age, acode, period)
+        )
+        return group_area * self.yield_m3_per_ha
+
+
+def test_period1_cohort_volumes_do_not_double_count_duplicate_schedule_rows(
+    tmp_path: Path,
+) -> None:
+    dtype_key = ("29", "managed", "2901000", STRATUM, str(CURVE_ID))
+    model = _DuplicatePathScheduleModel(
+        [
+            (dtype_key, 145, 244.593, "cc", 1, "_existing"),
+            (dtype_key, 145, 499.932, "cc", 1, "_existing"),
+            (dtype_key, 145, 300.0, "cc", 2, "_existing"),
+        ]
+    )
+    ws3_config = WS3RunConfig(
+        bridge_path=Path("/data/ws3_bridge"),
+        base_year=2025,
+        horizon=2,
+        output_root=tmp_path / "out",
+    )
+    state = _state([_row(145, 1_000.0)])
+
+    schedule, _objective = ws3._compile_schedule(model, object(), ws3_config)
+    ceilings = rh._period1_cohort_volumes(schedule, "cc", state)
+
+    cohort_id = rh.cohort_record_id("managed", "2901000", STRATUM, CURVE_ID, 145)
+    group_volume_m3 = (244.593 + 499.932) * _DuplicatePathScheduleModel.yield_m3_per_ha
+    assert ceilings == {cohort_id: pytest.approx(group_volume_m3)}
 
 
 # --- WS3 ceiling flow-through into the principal LP --------------------------
