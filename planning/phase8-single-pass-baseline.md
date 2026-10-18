@@ -543,10 +543,11 @@ planning note under `planning/`.
 ### P8.6: docs and closeout (#39)
 
 This covers `docs/model_semantics.rst` (a new "Single-pass baseline"
-section plus affected RH sections), `docs/cli.rst` (`single-pass-run`),
-`docs/architecture.rst`, `docs/ensembles.rst` (the `planning_mode` axis),
-`examples/single_pass_tsa29.yaml`, `CHANGE_LOG.md`, the ROADMAP closeout,
-and the PR description.
+section plus affected RH sections), `docs/cli.rst` (`single-pass-run`; a
+minimal section landed with P8.4), `docs/architecture.rst` (minimal notes
+landed with P8.4), `docs/ensembles.rst` (the `planning_mode` axis),
+`examples/single_pass_tsa29.yaml` (landed with P8.4), `CHANGE_LOG.md`, the
+ROADMAP closeout, and the PR description.
 
 ## 7. Artifact contract (single pass)
 

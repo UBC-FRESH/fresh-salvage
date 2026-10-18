@@ -1,0 +1,54 @@
+# Local example single-pass run config for the full TSA29 (dev profile).
+#
+# 10 decades x 10 implemented years = 100 years, solved ONCE at t=0: one
+# 15-period WS3 schedule (periods 1-10 implemented), one principal LP and one
+# agent LP over the 100-year horizon (decadal growth surface, grade clock
+# period_length, burned stock carried continuously), and one 100-year lineage
+# replay that regenerates removed area at the age-smashing midpoint. This is
+# the baseline that `rh-run` (decadal re-planning) is compared against.
+#
+# The paths below are machine-relative outputs of the earlier phases plus the
+# external validated FEMIC TSA29 package. They are never vendored in this
+# repository; replace the paths with your own run outputs before solving.
+#
+# Usage:
+#   fresh-salvage single-pass-run examples/single_pass_tsa29.yaml --json
+run_id: tsa29-single-pass-100yr-dev
+stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
+yields_path: /srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/femic-tsa29-instance/output/woodstock_tsa29_validated/woodstock_yields.csv
+bridge_path: /srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/femic-tsa29-instance/output/woodstock_tsa29_validated/ws3_bridge
+base_year: 2025
+# WS3 periods solved at t=0; only periods 1..steps are implemented (D1), so
+# horizon must be at least steps.
+horizon: 15
+period_length: 10
+steps: 10
+planning_mode: single_pass
+# Optional (single pass only): drop the burned inventory at decade boundaries,
+# mimicking the rolling-horizon boundary (D4).
+burned_stock_reset: false
+max_age: 999
+workers: 64
+age_smashing:
+  enabled: true
+  width: 10
+  midpoint: 5
+objective:
+  action_code: cc
+  utilization: 0.85
+  even_flow_tolerance: 0.1
+aac_annual_m3: 2937509
+# decay_rate/discount_rate match the standalone principal/agent defaults; the
+# salvage subsidy rate itself (3.0 $/m3) is the shared data.py constant used
+# by both LPs.
+decay_rate: 0.85
+discount_rate: 0.03
+burned_limit_annual_m3: null
+# The calibrated economic surface (planning/economics-calibration.md) is
+# carried on flat RHRunConfig fields — subsidy_rate_per_m3, green_prices,
+# burned_price_discount, green/burned_harvest_cost,
+# green/burned_transport_cost_per_m3, green/burned_stumpage_rate — each a
+# valid ensemble axis. Omitted here: the calibrated data.py defaults apply.
+output_root: outputs/single_pass_100yr_dev
+metadata:
+  description: 100-year single-pass WS3-principal-agent coupled baseline (one t=0 solve, 10 replayed decades).
