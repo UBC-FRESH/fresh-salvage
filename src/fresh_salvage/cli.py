@@ -8,7 +8,17 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from fresh_salvage import __version__, agent, data, ensemble, principal, rh, sensitivity, ws3
+from fresh_salvage import (
+    __version__,
+    agent,
+    data,
+    ensemble,
+    principal,
+    rh,
+    sensitivity,
+    single_pass,
+    ws3,
+)
 from fresh_salvage.models import (
     AgentResult,
     AgentRunConfig,
@@ -211,6 +221,42 @@ def rh_run(
         _print_failure(diagnostic, json_output, command="rh-run")
         raise typer.Exit(code=1)
     _print_rh_summary(result, json_output)
+
+
+@app.command(name="single-pass-run")
+def single_pass_run(
+    config_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a single-pass run YAML or JSON config."),
+    ],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON output."),
+    ] = False,
+) -> None:
+    """Run the single-pass whole-run baseline: one WS3, principal, and agent solve."""
+    try:
+        config = RHRunConfig.read(config_path)
+        # The command name is the intent (planning Q1): force the planning mode
+        # through a full re-validation, so the single-pass cross-field
+        # preconditions still fail fast at this boundary.
+        config = RHRunConfig.model_validate(
+            {**config.model_dump(mode="json"), "planning_mode": "single_pass"}
+        )
+        result = single_pass.run_single_pass(config)
+    except Exception as exc:
+        diagnostic = Diagnostic(
+            severity="error",
+            code=getattr(exc, "code", "single_pass_run_failed"),
+            message=str(exc),
+            context={
+                "config_path": str(config_path),
+                "exception_type": type(exc).__name__,
+            },
+        )
+        _print_failure(diagnostic, json_output, command="single-pass-run")
+        raise typer.Exit(code=1)
+    _print_single_pass_summary(result, json_output)
 
 
 @app.command(name="ensemble-run")
@@ -466,6 +512,51 @@ def _print_rh_summary(result: RHResult, json_output: bool) -> None:
     console.print(f"  Wall time: {result.wall_seconds:.1f} s")
 
     step_table = Table(title="Harvest and burn per implemented decade")
+    step_table.add_column("Step")
+    step_table.add_column("Start year")
+    step_table.add_column("Green (M m3)", justify="right")
+    step_table.add_column("Burned salvage (M m3)", justify="right")
+    step_table.add_column("Area burned (kha)", justify="right")
+    step_table.add_column("Wall (s)", justify="right")
+    for index, record in enumerate(result.step_records):
+        step_table.add_row(
+            str(record.step),
+            str(record.start_year),
+            f"{result.decadal_green_harvest_m3[index] / 1e6:.2f}",
+            f"{result.decadal_burned_harvest_m3[index] / 1e6:.2f}",
+            f"{result.decadal_area_burned_ha[index] / 1e3:.1f}",
+            f"{record.wall_seconds:.1f}",
+        )
+    console.print(step_table)
+
+    for diagnostic in result.diagnostics:
+        console.print(f"[yellow]Warning:[/yellow] {diagnostic.code}: {diagnostic.message}")
+
+    console.print("Artifacts:")
+    console.print(f"  {result.steps_path}")
+    console.print(f"  {result.final_state_path}")
+    console.print(f"  {result.manifest_path}")
+
+
+def _print_single_pass_summary(result: RHResult, json_output: bool) -> None:
+    """Print the single-pass run summary as JSON or a Rich report."""
+
+    if json_output:
+        payload = {"ok": True, "command": "single-pass-run", **result.summary()}
+        console.out(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(f"[bold green]Single-pass run complete:[/bold green] {result.run_id}")
+    console.print(f"  Status: {result.status}")
+    console.print(
+        f"  Steps: {result.steps} x {result.period_length} years implemented by one "
+        f"{result.horizon}-period WS3 solve and one "
+        f"{result.steps * result.period_length}-year principal/agent LP pair"
+    )
+    console.print(f"  Cohorts at end: {result.cohorts:,}")
+    console.print(f"  Wall time: {result.wall_seconds:.1f} s")
+
+    step_table = Table(title="Harvest and burn per replayed decade")
     step_table.add_column("Step")
     step_table.add_column("Start year")
     step_table.add_column("Green (M m3)", justify="right")

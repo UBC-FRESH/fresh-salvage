@@ -127,7 +127,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -165,6 +165,7 @@ __all__ = [
     "AgentError",
     "AgentLP",
     "build_agent_lp",
+    "decadal_objective_values",
     "load_cohorts",
     "resolve_offers",
     "run_agent",
@@ -212,11 +213,17 @@ class AgentCohort:
 
 @dataclass(frozen=True)
 class AgentLP:
-    """A built HiGHS model plus the column layout needed to read it back."""
+    """A built HiGHS model plus the column layout needed to read it back.
+
+    ``objective_coefficients`` holds the LP's own objective vector (the H, S, V,
+    B column blocks in that order, mirroring the column layout), so
+    :func:`decadal_objective_values` can decompose the solved objective exactly.
+    """
 
     model: highspy.Highs
     decision_columns: tuple[tuple[int, int], ...]
     horizon: int
+    objective_coefficients: np.ndarray = field(compare=False, hash=False)
 
 
 def load_cohorts(config: AgentRunConfig) -> list[AgentCohort]:
@@ -414,11 +421,12 @@ def build_agent_lp(
             - economics.green_stumpage_rate
         )
         volumes = _cohort_year_volumes(cohort, horizon, period_length)
+        burned_prices = _annual_burned_prices(cohort, horizon, grade_clock_period)
         base = c_index * horizon
         for year in range(horizon):
             discount_factor = 1.0 / (1.0 + discount_rate) ** (year + 1)
             salvage_margin = (
-                _annual_burned_price(cohort, year, grade_clock_period=grade_clock_period)
+                burned_prices[year]
                 - economics.burned_harvest_cost
                 - economics.burned_transport_cost_per_m3
                 - economics.burned_stumpage_rate
@@ -546,7 +554,12 @@ def build_agent_lp(
     decision_columns = tuple(
         (c_index, year) for c_index in range(cohort_count) for year in range(horizon)
     )
-    return AgentLP(model=model, decision_columns=decision_columns, horizon=horizon)
+    return AgentLP(
+        model=model,
+        decision_columns=decision_columns,
+        horizon=horizon,
+        objective_coefficients=costs,
+    )
 
 
 def _decadal_scale_array(
@@ -703,6 +716,48 @@ def _annual_burned_grade_mix(
     return annual_grade_mix(initial_mix, index + 1)[index]
 
 
+def _annual_burned_prices(
+    cohort: AgentCohort, horizon: int, grade_clock_period: int | None
+) -> tuple[float, ...]:
+    """Return the predetermined burned price of every model year in the horizon.
+
+    The price depends on the model year only through its grade-mix index
+    (``year % grade_clock_period`` under D5), so the clocked single-pass path
+    prices each residue ONCE instead of rebuilding the ``O(year)`` grade-mix
+    trajectory for every year of every cohort (the issue #38 probe). Values are
+    the same floats :func:`_annual_burned_price` returns per year; the unclocked
+    rolling-horizon path keeps its year-by-year evaluation unchanged.
+    """
+
+    if grade_clock_period is None or cohort.burned_grade_mix is None:
+        return tuple(_annual_burned_price(cohort, year) for year in range(horizon))
+    priced_residue = {
+        residue: _annual_burned_price(cohort, residue)
+        for residue in range(min(grade_clock_period, horizon))
+    }
+    return tuple(priced_residue[year % grade_clock_period] for year in range(horizon))
+
+
+def _annual_burned_mixes(
+    cohort: AgentCohort, horizon: int, grade_clock_period: int | None
+) -> tuple[tuple[float, ...], ...]:
+    """Return the predetermined grade mix of every model year in the horizon.
+
+    Memoized residue evaluation of :func:`_annual_burned_grade_mix`, exactly as
+    :func:`_annual_burned_prices` memoizes the price path.
+    """
+
+    if grade_clock_period is None or cohort.burned_grade_mix is None:
+        return tuple(
+            _annual_burned_grade_mix(cohort, year) for year in range(horizon)
+        )
+    mixed_residue = {
+        residue: _annual_burned_grade_mix(cohort, residue)
+        for residue in range(min(grade_clock_period, horizon))
+    }
+    return tuple(mixed_residue[year % grade_clock_period] for year in range(horizon))
+
+
 def solve_agent(
     cohorts: list[AgentCohort],
     offers: list[tuple[float, ...]],
@@ -763,8 +818,13 @@ def solve_agent(
     burned_end_m3 = np.zeros(horizon)
     burned_grade_m3 = {grade: np.zeros(horizon) for grade in GRADE_ORDER}
     active_cohort_years = 0
+    burned_mixes_by_cohort: dict[int, tuple[tuple[float, ...], ...]] = {}
     for column, (c_index, year) in enumerate(built.decision_columns):
         cohort = cohorts[c_index]
+        burned_mixes = burned_mixes_by_cohort.get(c_index)
+        if burned_mixes is None:
+            burned_mixes = _annual_burned_mixes(cohort, horizon, grade_clock_period)
+            burned_mixes_by_cohort[c_index] = burned_mixes
         harvest = _parse_action_fraction(float(solution[column]), column)
         salvage = _parse_action_fraction(
             float(solution[block + column]), block + column
@@ -796,7 +856,7 @@ def solve_agent(
         burned_end_m3[year] += burned * volume
         for grade, share in zip(
             GRADE_ORDER,
-            _annual_burned_grade_mix(cohort, year, grade_clock_period=grade_clock_period),
+            burned_mixes[year],
             strict=True,
         ):
             burned_grade_m3[grade][year] += burned * volume * share
@@ -836,7 +896,64 @@ def solve_agent(
         lp_rows=built.model.getNumRow(),
         lp_columns=built.model.getNumCol(),
         solve_seconds=solve_seconds,
+        decadal_objective_values=(
+            []
+            if period_length is None
+            else decadal_objective_values(
+                built,
+                solution,
+                period_length=period_length,
+                discount_rate=discount_rate,
+            )
+        ),
     )
+
+
+def decadal_objective_values(
+    built: AgentLP,
+    solution: np.ndarray,
+    *,
+    period_length: int,
+    discount_rate: float,
+) -> list[float]:
+    """Decompose the solved agent objective into decade contributions (D7).
+
+    Decade ``k`` receives the objective terms of its ``period_length`` HL/S
+    columns (the LP already discounts every cashflow by ``(1+r)**-(year+1)``),
+    multiplied by ``(1+r)**(period_length*k)`` so each value is re-based to its
+    decade start and is directly comparable with a rolling-horizon step record.
+    Filled into the returned :class:`AgentResult` whenever ``solve_agent`` is
+    given ``period_length`` (the single-pass path).
+    """
+
+    if period_length <= 0:
+        raise AgentError(
+            "agent_invalid_period_length",
+            f"period_length must be positive, got {period_length}",
+        )
+    if built.horizon % period_length != 0:
+        raise AgentError(
+            "agent_invalid_period_length",
+            f"the agent horizon ({built.horizon}) is not a whole number of "
+            f"{period_length}-year decades",
+        )
+    if discount_rate < 0.0:
+        raise AgentError(
+            "agent_invalid_discount",
+            f"discount_rate cannot be negative: {discount_rate}",
+        )
+    decades = [0.0] * (built.horizon // period_length)
+    salvage_offset = len(built.decision_columns)
+    costs = built.objective_coefficients
+    for column, (_c_index, year) in enumerate(built.decision_columns):
+        decade = year // period_length
+        decades[decade] += float(costs[column]) * float(solution[column])
+        salvage_column = salvage_offset + column
+        decades[decade] += float(costs[salvage_column]) * float(solution[salvage_column])
+    return [
+        value * (1.0 + discount_rate) ** (period_length * decade)
+        for decade, value in enumerate(decades)
+    ]
 
 
 def run_agent(config: AgentRunConfig) -> AgentResult:

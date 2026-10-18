@@ -94,6 +94,7 @@ import pandas as pd
 
 from fresh_salvage import agent, fire, principal, ws3
 from fresh_salvage.models import (
+    WS3_HARVEST_RESET_AGE,
     AgeSmashing,
     ArtifactLayout,
     Economics,
@@ -107,11 +108,12 @@ from fresh_salvage.models import (
 
 AREA_CONSERVATION_REL_TOLERANCE = ws3.AREA_CONSERVATION_REL_TOLERANCE
 FRACTION_SNAP_TOLERANCE = 1e-9
-# Age WS3 assigns to clear-cut area: the bridge declares ``*ACTION cc Y`` and
-# ws3 maps the ``Y`` flag to ``Action.targetage = 0`` (no ``_AGE`` override in
-# the transitions), so regenerated stands sit on the ``0 (mod period_length)``
-# age lattice in later periods.
-WS3_HARVEST_RESET_AGE = 0
+# ``WS3_HARVEST_RESET_AGE`` (age WS3 assigns to clear-cut area: the bridge
+# declares ``*ACTION cc Y`` and ws3 maps the ``Y`` flag to
+# ``Action.targetage = 0``, so regenerated stands sit on the
+# ``0 (mod period_length)`` age lattice in later periods) is imported from
+# ``models`` because ``RHRunConfig`` validates the lattice preconditions too;
+# it stays part of the P8.1 ceiling-mapper API via this module's ``__all__``.
 DTYPE_KEY_LENGTH = 5
 
 STATE_KEY_COLUMNS = ("tsa", "ifm", "au_id", "stratum_code", "curve_id", "age")
@@ -442,6 +444,22 @@ def inject_cohort_table(model: object, state: pd.DataFrame) -> dict[str, object]
     return {"dtypes_with_area": len(grouped), "area_ha": injected_area_ha}
 
 
+def run_planning(config: RHRunConfig, verbose: bool = False) -> RHResult:
+    """Run one coupled planning pipeline selected by ``config.planning_mode``.
+
+    The single dispatch point for the CLI (``rh-run``), the ensemble driver,
+    and the sensitivity driver: ``"rolling_horizon"`` routes to :func:`run_rh`,
+    ``"single_pass"`` to :func:`fresh_salvage.single_pass.run_single_pass`.
+    ``single_pass`` is imported lazily because it imports this module.
+    """
+
+    if config.planning_mode == "single_pass":
+        from fresh_salvage import single_pass
+
+        return single_pass.run_single_pass(config, verbose=verbose)
+    return run_rh(config, verbose=verbose)
+
+
 def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
     """Run the rolling-horizon coupled loop and write artifacts + manifest.
 
@@ -449,7 +467,18 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
     failure wraps the underlying structured error with the step context.
     Completed per-step JSONL records are flushed to ``steps_path`` as they
     finish, so a failed run still leaves its partial trajectory on disk.
+    A config whose ``planning_mode`` is not ``"rolling_horizon"`` fails fast
+    (the artifacts would otherwise be mislabeled); the dispatcher
+    :func:`run_planning` routes every mode.
     """
+
+    if config.planning_mode != "rolling_horizon":
+        raise RHError(
+            "rh_planning_mode_invalid",
+            f"run_rh requires planning_mode='rolling_horizon', got "
+            f"{config.planning_mode!r}; use rh.run_planning (or single_pass.run_single_pass) "
+            "for single-pass runs",
+        )
 
     started_at = datetime.now(UTC)
     wall_started = time.monotonic()
@@ -547,6 +576,7 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
         started_at=started_at,
         completed_at=datetime.now(UTC),
         status=status,
+        planning_mode=config.planning_mode,
         steps=config.steps,
         horizon=config.horizon,
         period_length=config.period_length,
@@ -558,6 +588,12 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
             sum(record.annual_burned_harvest_m3) for record in step_records
         ),
         total_area_burned_ha=sum(record.area_burned_ha for record in step_records),
+        total_principal_objective=sum(
+            record.principal_objective_value for record in step_records
+        ),
+        total_agent_objective_base_year=_agent_objective_base_year(
+            step_records, config.period_length, config.discount_rate
+        ),
         wall_seconds=wall_seconds,
         source_sha256=_source_checksums(config, bridge),
         step_records=step_records,
@@ -568,6 +604,7 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
     return RHResult(
         run_id=config.run_id,
         status=status,
+        planning_mode=config.planning_mode,
         steps=config.steps,
         horizon=config.horizon,
         period_length=config.period_length,
@@ -585,6 +622,23 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
         steps_path=steps_path,
         final_state_path=final_state_path,
         manifest_path=manifest_path,
+    )
+
+
+def _agent_objective_base_year(
+    step_records: list[RHStepRecord], period_length: int, discount_rate: float
+) -> float:
+    """Re-base each recorded step's agent NPV to the run base year (D7).
+
+    Step ``k`` solves its window at the run's ``L*(k-1)``-years-later start, so
+    its reported NPV is multiplied by ``(1+r)**-(L*(k-1))``; the total is then
+    comparable with a single-pass LP objective, which discounts from t=0.
+    """
+
+    return sum(
+        record.agent_objective_value
+        * (1.0 + discount_rate) ** (-period_length * (record.step - 1))
+        for record in step_records
     )
 
 
@@ -1057,6 +1111,7 @@ __all__ = [
     "curve_age_caps",
     "inject_cohort_table",
     "read_cohort_table",
+    "run_planning",
     "run_rh",
     "schedule_cohort_period_volumes",
     "write_cohort_table",

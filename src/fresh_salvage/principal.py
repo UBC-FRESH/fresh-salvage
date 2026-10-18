@@ -118,7 +118,7 @@ import hashlib
 import math
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -210,11 +210,21 @@ class PrincipalOfferCoefficients:
 
 @dataclass(frozen=True)
 class PrincipalLP:
-    """A built HiGHS model plus the column layout needed to read it back."""
+    """A built HiGHS model plus the column layout needed to read it back.
+
+    ``objective_coefficients`` holds the LP's own objective vector (offer
+    columns first, then cumulative-offer columns, mirroring the column layout)
+    and ``offset_by_year`` the constant ``-sum_c annual_burn_loss[c, y]`` that
+    :func:`build_principal_lp` folds into the HiGHS objective offset, attributed
+    per LP year. Together they let :func:`decadal_objective_values` decompose
+    the solved objective exactly.
+    """
 
     model: highspy.Highs
     offer_columns: tuple[tuple[int, int], ...]
     horizon: int
+    objective_coefficients: np.ndarray = field(compare=False, hash=False)
+    offset_by_year: tuple[float, ...] = field(compare=False, hash=False)
 
 
 def load_cohorts(config: PrincipalRunConfig) -> list[PrincipalCohort]:
@@ -378,6 +388,7 @@ def build_principal_lp(
     # reported objective values match the formula above exactly.
     costs = np.zeros(total_columns)
     offset = 0.0
+    offset_by_year = np.zeros(horizon)
     for c_index, cohort in enumerate(cohorts):
         base = c_index * horizon
         coefficients = _principal_offer_coefficients(
@@ -392,6 +403,7 @@ def build_principal_lp(
         for year, loss in enumerate(coefficients.annual_burn_loss):
             costs[offer_count + base + year] = loss
             offset -= loss
+            offset_by_year[year] -= loss
     model.changeColsCost(
         total_columns,
         np.arange(total_columns, dtype=np.int32),
@@ -451,7 +463,13 @@ def build_principal_lp(
                     np.array([green_by_year[c_index, year]]),
                 )
 
-    return PrincipalLP(model=model, offer_columns=offer_columns, horizon=horizon)
+    return PrincipalLP(
+        model=model,
+        offer_columns=offer_columns,
+        horizon=horizon,
+        objective_coefficients=costs,
+        offset_by_year=tuple(float(value) for value in offset_by_year),
+    )
 
 
 def solve_principal(
@@ -539,11 +557,57 @@ def solve_principal(
             )
             for year in range(horizon)
         ],
+        decadal_objective_values=(
+            []
+            if period_length is None
+            else decadal_objective_values(built, solution, period_length=period_length)
+        ),
         offered_cohort_years=offered_cohort_years,
         lp_rows=built.model.getNumRow(),
         lp_columns=built.model.getNumCol(),
         solve_seconds=solve_seconds,
     )
+
+
+def decadal_objective_values(
+    built: PrincipalLP, solution: np.ndarray, *, period_length: int
+) -> list[float]:
+    """Decompose the solved principal objective into decade contributions.
+
+    Decade ``k`` receives the objective terms of its ``period_length`` LP years —
+    every offer column and its paired cumulative-offer column — plus its share of
+    the constant offset (the builder folds ``-sum_c loss[c, y]`` per year into the
+    HiGHS objective offset). The objective is undiscounted, so the values are
+    identical whether re-based to the decade start or to the run base year (D7),
+    and they sum back to the LP objective value. Filled into the returned
+    :class:`PrincipalResult` whenever ``solve_principal`` is given
+    ``period_length`` (the single-pass path).
+    """
+
+    if period_length <= 0:
+        raise PrincipalError(
+            "principal_invalid_period_length",
+            f"period_length must be positive, got {period_length}",
+        )
+    if built.horizon % period_length != 0:
+        raise PrincipalError(
+            "principal_invalid_period_length",
+            f"the principal horizon ({built.horizon}) is not a whole number of "
+            f"{period_length}-year decades",
+        )
+    decades = [0.0] * (built.horizon // period_length)
+    for year, offset in enumerate(built.offset_by_year):
+        decades[year // period_length] += offset
+    offer_column_count = len(built.offer_columns)
+    costs = built.objective_coefficients
+    for column, (_c_index, year) in enumerate(built.offer_columns):
+        decade = year // period_length
+        decades[decade] += float(costs[column]) * float(solution[column])
+        cumulative_column = offer_column_count + column
+        decades[decade] += (
+            float(costs[cumulative_column]) * float(solution[cumulative_column])
+        )
+    return decades
 
 
 def run_principal(config: PrincipalRunConfig) -> PrincipalResult:
@@ -1337,6 +1401,7 @@ __all__ = [
     "PrincipalLP",
     "PrincipalOfferCoefficients",
     "build_principal_lp",
+    "decadal_objective_values",
     "decadal_per_ha_volumes",
     "load_cohorts",
     "run_principal",
