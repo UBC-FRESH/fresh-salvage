@@ -959,10 +959,19 @@ def _annual_burned_volumes(
         volumes.append(burned)
         influx_basis = fire.burn_influx(live_basis, cohort.burn_rate)
         live_basis = fire.live_volume_after(live_basis, 0.0, influx_basis)
-        if decade == 0:
-            influx = influx_basis
-        elif v0 > 0.0:
-            influx = influx_basis * float(per_ha[decade]) / v0
+        # Burn influx in decade k is ``R * live_basis * v_k``: the live basis
+        # stays on the parsed t=0 basis (volume when v_0 > 0, area when
+        # v_0 = 0) and each influx is scaled by ``v_k`` (or ``v_k / v_0`` in
+        # volume units). Decade 0 keeps the unscaled basis when ``v_0 > 0``
+        # (that basis is already in volume units, and the shortcut keeps the
+        # reduction to the static path bit-exact); a zero t=0 volume cohort
+        # scales its area-based influx by ``v_0 = 0`` in decade 0 as well.
+        if v0 > 0.0:
+            influx = (
+                influx_basis
+                if decade == 0
+                else influx_basis * float(per_ha[decade]) / v0
+            )
         else:
             influx = influx_basis * float(per_ha[decade])
         burned = fire.burned_volume_after(burned, influx, 0.0, decay_rate)

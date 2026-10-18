@@ -204,6 +204,42 @@ def test_principal_horizon_within_one_decade_reduces_bit_exactly() -> None:
     assert _lp_arrays(_reduced_principal_lp()) == _lp_arrays(_static_principal_lp())
 
 
+def test_principal_zero_t0_volume_cohort_reduces_bit_exactly() -> None:
+    # Regression (P8.4): cohorts with zero t=0 per-ha volume have an
+    # area-based live basis; their decade-0 burn influx must be scaled by
+    # v_0 = 0 too, or the principal charges a burned-value loss that the
+    # rolling-horizon LP does not have (the real-data steps=1 oracle caught
+    # this as a 2-ulp objective difference).
+    cohort = principal.PrincipalCohort(
+        cohort_id="zero",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=10.0,
+        green_volume_m3=0.0,
+        burned_volume_m3=0.0,
+        cashflow=0.0,
+        burned_value=0.0,
+        burn_rate=0.01,
+        burned_grade_mix=(0.2, 0.6, 0.2, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+        green_stumpage_rate=4.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+    )
+
+    static = principal.build_principal_lp([cohort], horizon=HORIZON, aac_annual_m3=5_000.0)
+    reduced = principal.build_principal_lp(
+        [dataclasses.replace(cohort, decadal_volume_scale=(0.0,))],
+        horizon=HORIZON,
+        aac_annual_m3=5_000.0,
+        period_length=PERIOD_LENGTH,
+        grade_clock_period=PERIOD_LENGTH,
+        burned_stock_reset=True,
+    )
+
+    assert _lp_arrays(reduced) == _lp_arrays(static)
+
+
 def test_agent_horizon_within_one_decade_reduces_bit_exactly() -> None:
     assert _lp_arrays(_reduced_agent_lp()) == _lp_arrays(_static_agent_lp())
 
