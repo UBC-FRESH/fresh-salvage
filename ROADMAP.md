@@ -17,7 +17,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
-| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Active (P8.1 complete) |
+| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Active (P8.1-P8.4 complete) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -239,7 +239,7 @@ Parent issue: #33
 Branch: `feature/p8-single-pass-baseline` (built on PR #32,
 `fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
 
-Status: active (P8.1-P8.3 complete)
+Status: active (P8.1-P8.4 complete)
 
 Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
 principal -> agent -> fire pipeline solved once at t=0 over the full run
@@ -259,8 +259,12 @@ surface, artifact contract, test plan, risks):
 - [x] P8.3 Grade-clock option and burned-stock continuity/reset semantics
       (#36): `grade_clock_period`, `burned_stock_reset` in both LPs, and
       carry-versus-reset analytic tests.
-- [ ] P8.4 `single_pass` orchestrator, `single-pass-run` CLI, ensemble
-      dispatch, oracle test (#37).
+- [x] P8.4 `single_pass` orchestrator, `single-pass-run` CLI, ensemble
+      dispatch, oracle test (#37): `single_pass.run_single_pass` solves the
+      one t=0 WS3 problem, both whole-run LPs, and the decade-block lineage
+      replay; `planning_mode`/`burned_stock_reset` config validation, the
+      `run_planning` dispatcher, the `planning_mode` ensemble axis, and the
+      steps=1 oracle (synthetic WS3 stub plus a gated real-data variant).
 - [ ] P8.5 Full-TSA29 tractability probe and paired RH vs single-pass
       evidence run (#38).
 - [ ] P8.6 Docs, examples, CHANGE_LOG, and roadmap closeout (#39).

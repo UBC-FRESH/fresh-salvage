@@ -5,6 +5,65 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 8 P8.4 (issue #37): the single-pass 100-year orchestrator,
+  `planning_mode`/`burned_stock_reset` config surface, `single-pass-run` CLI,
+  and ensemble dispatch.
+  - `src/fresh_salvage/single_pass.py` adds
+    `run_single_pass(config, verbose) -> RHResult`: one WS3 solve at t=0 (the
+    same `horizon`-period problem `rh-run` solves at step 1, D1), per-cohort
+    per-year WS3 ceilings from `rh.schedule_cohort_period_volumes` /
+    `rh.annual_ceiling_matrix`, one principal LP and one agent LP over
+    `steps * period_length` years with the decadal growth surface, the grade
+    clock (D5) and the configured burned-stock semantics (D4/D6), then a
+    100-year decade-block lineage replay (`single_pass.replay_lineage`) that
+    ages survivors, regenerates everything that left the live pool at the
+    smashing midpoint, keeps the replayed burned inventory consistent with the
+    LP, and writes `derived/rh_state/step_{k:02d}.are` for `k = 0..steps`.
+  - `RHRunConfig` gained `planning_mode: Literal["rolling_horizon",
+    "single_pass"]` (default `rolling_horizon`) and `burned_stock_reset: bool`
+    with cross-field validation: single pass requires `horizon >= steps` and
+    the P8.1 age-lattice preconditions; `burned_stock_reset` is rejected
+    outside single pass. Both are flat, so either is an ensemble/sensitivity
+    axis.
+  - `RHStepRecord` now allows absent WS3 fields (populated for decade 1 only,
+    D8) and carries `principal_objective_value_base_year` /
+    `agent_objective_value_base_year` next to the decade-start objective
+    values (D7). `RHManifest` gained the defaulted `planning_mode` plus
+    `total_principal_objective` / `total_agent_objective_base_year`, summed
+    from the records in both modes. `RHResult` carries `planning_mode`.
+  - `principal.decadal_objective_values` / `agent.decadal_objective_values`
+    decompose the solved objectives per decade (the principal's constant
+    offset included) from the built LP's own cost vector, which the builders
+    now expose on `PrincipalLP`/`AgentLP`; `solve_principal`/`solve_agent` fill
+    the new `decadal_objective_values` result field when given
+    `period_length`.
+  - `rh.run_planning(config, verbose)` dispatches by `planning_mode`; the
+    ensemble worker and `cli.rh_run` use it, so paired RH-vs-single-pass
+    ensembles work through an axis. `run_rh` and `run_single_pass` each
+    reject the other mode with a structured diagnostic. The thin
+    `single-pass-run` command forces `planning_mode="single_pass"` through a
+    full re-validation (planning Q1 resolved).
+  - Correction surfaced by the `steps=1` oracle: a cohort with zero t=0
+    per-ha volume had its decade-0 burn influx scaled by 1 instead of
+    `v_0 = 0` in `principal._annual_burned_volumes`, so the principal charged
+    a burned-value loss the rolling-horizon LP does not have (75 TSA29
+    cohorts; a 2-ulp objective difference). Fixed, with a regression test in
+    the growth-equivalence suite.
+  - Perf finisher from the issue #38 probe: `agent._annual_burned_prices` /
+    `_annual_burned_mixes` price each grade-clock residue once per cohort
+    instead of rebuilding the `O(year)` grade-mix trajectory per cohort-year
+    (identical floats; the equivalence tests still pass bit-exactly).
+  - Tests: `tests/test_single_pass.py` (42 tests: lineage replay assembly,
+    conservation, caps, reset invariance and failure paths; both decades
+    decompositions including the principal offset; decade record slicing;
+    config validation; old-manifest parsing; dispatcher and ensemble-axis
+    routing; CLI failure paths and mode forcing; the `steps=1` oracle in a
+    ws3-free variant and against the local TSA29 bridge). Real-data smoke
+    (local, not tracked): single pass with `steps=1` reproduces the `rh-run`
+    step-1 record with a bit-identical final state; the full 100-year run
+    (steps=10, horizon=15, WS3 `workers=1`, `taskset -c 0-3`) completes in
+    122 s wall with area conserved bit-exactly and totals comparable with the
+    local `rh_100yr_calib` run.
 - Phase 8 P8.2/P8.3 (issues #35, #36): decadal growth-aware volume
   coefficients, the grade clock, and burned-stock continuity/reset
   semantics.

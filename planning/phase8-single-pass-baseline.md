@@ -1,6 +1,6 @@
 # Phase 8: Single-Pass 100-Year Planning Baseline
 
-Status: active (P8.1-P8.3 implemented; P8.4-P8.6 open)
+Status: active (P8.1-P8.4 implemented; P8.5-P8.6 open)
 
 Branch: `feature/p8-single-pass-baseline` (cut from
 `origin/fix/schedule-group-volume-dedup` at `9b5a0a0`, the PR #32 head;
@@ -116,6 +116,13 @@ clip in D2.
   ceilings. `rh.curve_age_caps` is NOT used for valuation; it still governs RH
   state aging (unchanged). The LP-versus-WS3 age-clamp asymmetry of risk R3
   is therefore gone.
+  - **P8.4 correction (zero-volume cohorts, see section 3.2).** A cohort with
+    `v_0 = 0` tracks its live basis in AREA units, and its burn influx is
+    scaled by `v_k` for every decade — including decade 0, where the scale is
+    `v_0 = 0`. The first P8.2 build left decade 0 unscaled for those cohorts,
+    which charged a burned-value loss the rolling-horizon LP does not have;
+    the real-data `steps=1` oracle (P8.4) caught it as a 2-ulp objective
+    difference. Regression-tested in the growth-equivalence suite.
 - **Growth surface representation.** `PrincipalCohort.decadal_volume_scale` /
   `AgentCohort.decadal_volume_scale` hold ABSOLUTE per-ha volumes (m3/ha),
   one per decade, produced by `principal.decadal_per_ha_volumes`. Absolute
@@ -164,6 +171,83 @@ clip in D2.
   against the in-module static path and against the branch-base module
   extracted from git (`53ba8d1`, content-identical to `09ed633`); the
   cross-module tests skip in a shallow CI checkout.
+
+### 3.2 P8.4 implementation session
+
+Resolutions applied while implementing the single-pass orchestrator (issue
+#37). The P8.4 spec in section 6 stands as the contract; these notes record
+the choices the spec left open and the corrections it surfaced.
+
+- **Zero-t0-volume burn influx (P8.2 correction).** `principal._annual_burned_volumes`
+  scaled decade 0's area-based influx by 1 instead of `v_0 = 0`, so the 75
+  TSA29 cohorts with zero t=0 per-ha volume carried a burned-value loss the
+  rolling-horizon LP does not have. The real-data `steps=1` oracle reproduced
+  the RH record to 2 ulps in the principal objective but not bit-exactly; the
+  fix restores the documented `R * live_area * v_k` semantics for every
+  decade and the bit-exact reduction. Regression test:
+  `test_principal_zero_t0_volume_cohort_reduces_bit_exactly`.
+- **Objective decomposition.** `principal.decadal_objective_values` /
+  `agent.decadal_objective_values` read the LP's own cost vector (now carried
+  on the built `PrincipalLP`/`AgentLP` as `objective_coefficients`, plus the
+  principal's per-year offset share) and the solved column values, so the
+  per-decade values are exact decompositions up to float summation order (they
+  agree with the LP objective to ~1e-15 relative, not bit-exactly).
+  `solve_principal`/`solve_agent` fill `PrincipalResult.decadal_objective_values`
+  / `AgentResult.decadal_objective_values` whenever `period_length` is given.
+- **Decade record fields.** `RHStepRecord` gained optional
+  `principal_objective_value_base_year` / `agent_objective_value_base_year`
+  (D7: the decade-start basis stays in `*_objective_value`); the WS3 fields and
+  all four timing fields are now defaulted/nullable, and the one-time WS3 and
+  LP costs are attributed to decade 1. Per-decade `wall_seconds` is the replay
+  wall of that decade (the only per-decade work in single pass).
+- **Run totals.** `RHManifest.planning_mode` (defaulted), `total_principal_objective`,
+  and `total_agent_objective_base_year` are summed from the emitted records in
+  both modes, so the two modes' manifests are computed identically.
+- **Replay semantics.** `single_pass.replay_lineage` carries each lineage's
+  FORMATION area (`reference_area_ha`) plus its live/burned fractions, so a
+  multi-decade t=0 cohort keeps its t=0 area as the reference; survivors are
+  `reference * live_end`, regen sub-cohorts `reference * (live_start - live_end)`
+  at the smashing midpoint. Each decade re-enters `fire.simulate_cohort_years`
+  with the carried burned inventory (`0.0` under `burned_stock_reset`, matching
+  the LP rows); the live trajectory — and therefore the state and
+  `area_burned_ha` — is identical either way. Zero-harvest regen lineages are
+  simulated through the same primitive.
+- **Artifact names.** The one schedule is `data/<run>-schedule.csv`, the
+  run-level offers/decisions `data/<run>-offers.parquet` /
+  `data/<run>-decisions.parquet` (the table in section 7).
+- **Mode guards.** `run_rh` rejects a `single_pass` config and
+  `run_single_pass` rejects a `rolling_horizon` config
+  (`rh_planning_mode_invalid` / `single_pass_planning_mode_required`) so
+  artifacts are never mislabeled; `rh.run_planning(config, verbose)` is the
+  shared dispatcher used by `cli.rh_run`, the ensemble worker, and (through
+  the ensemble) the sensitivity driver.
+- **Q1 resolved: the CLI overrides.** `single-pass-run` re-validates the
+  config with `planning_mode="single_pass"` (a full `model_validate`, so the
+  cross-field preconditions still fail fast) instead of rejecting
+  `rolling_horizon`; the command name is the intent.
+- **Perf finisher from #38.** `agent._annual_burned_prices` /
+  `_annual_burned_mixes` price each grade-clock residue once per cohort
+  instead of rebuilding the `O(year)` grade-mix trajectory per cohort-year
+  (identical floats; equivalence tests unchanged).
+- **P8.4 smoke evidence (local, not tracked; logs under `/tmp/opencode/p8/`).**
+  All runs under `taskset -c 0-3`, `OMP_NUM_THREADS=4`, WS3 `workers=1`:
+  - paired `steps=1` (`horizon=3`): the decade-1 record matches the `rh-run`
+    step-1 record (arrays exact; principal objective 6.8e-16 relative), the
+    final states are BIT-identical (1,450 cohorts, 2,977,503.738599 ha), and
+    the manifests' totals agree.
+  - `steps=3` (`horizon=15`): 31 s wall, three decade records, four
+    snapshots.
+  - full 100-year `steps=10` (`horizon=15`): 122 s wall, 10 decade records,
+    11 snapshots, area conserved bit-exactly (2,977,503.738599 ha,
+    1,608 -> 1,695 cohorts). Totals versus the local `rh_100yr_calib` run:
+    green 33.90M vs 36.25M m3, burned salvage 0.0 in both, area burned
+    2.0094M vs 2.0089M ha. The paired evidence run (P8.5) should use the same
+    config pair.
+  - Cost profile for P8.5: the decade replay is the fastest-growing term
+    (0.08 s at decade 1 to 37 s at decade 10) because every decade re-simulates
+    all active regen lineages; memoizing the zero-harvest trajectory by
+    `(burn_rate, years)` would collapse it, as would vectorizing the Python
+    `addRow` LP builds (R2).
 
 ## 4. Configuration surface (P8.4)
 
@@ -376,7 +460,10 @@ they differ (unclamped valuation age; absolute per-ha volumes).
   `L`, the LPs are identical (equivalence tests). Analytic 2-decade tests
   cover carry versus reset.
 
-### P8.4: `single_pass` orchestrator (#37)
+### P8.4: `single_pass` orchestrator (#37) — implemented
+
+Implementation notes and the P8.2 correction this task surfaced are in
+section 3.2; the spec below is the contract it implements.
 
 New module `src/fresh_salvage/single_pass.py` with
 `run_single_pass(config, verbose) -> RHResult`:
@@ -532,4 +619,8 @@ state.
   pre-existing asymmetry is unchanged by Phase 8.
 - **Q1:** Should `single-pass-run` override `planning_mode` to
   `single_pass` regardless of config, or fail on `rolling_horizon`?
-  Recommendation: override. The CLI name is the intent.
+  RESOLVED (P8.4): override, through a full re-validation so the single-pass
+  cross-field preconditions still fail fast. The CLI name is the intent; the
+  library entry points keep the strict guards (`run_rh` rejects
+  `single_pass` configs and `run_single_pass` rejects `rolling_horizon` ones)
+  so artifacts are never mislabeled. `rh.run_planning` is the dispatcher.

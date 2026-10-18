@@ -303,6 +303,11 @@ Run the rolling-horizon principal-agent coordination loop.
 
    fresh-salvage rh-run examples/rh_tsa29.yaml [--json]
 
+Runs the coupled WS3 -> principal -> agent -> fire pipeline selected by the
+config's ``planning_mode``: ``rolling_horizon`` (the default) re-plans every
+step, ``single_pass`` runs `single-pass-run`_'s whole-run baseline (they share
+the dispatcher, so a config is enough to switch).
+
 Config (``RHRunConfig``):
 
 .. list-table::
@@ -330,6 +335,15 @@ Config (``RHRunConfig``):
    * - ``steps``
      - 10
      - Implemented rolling-horizon steps (10 x 10 years = 100 years).
+   * - ``planning_mode``
+     - ``rolling_horizon``
+     - ``rolling_horizon`` re-plans every step; ``single_pass`` solves the
+       whole run once at t=0 (see `single-pass-run`_). Either mode is a valid
+       ensemble/sensitivity axis.
+   * - ``burned_stock_reset``
+     - false
+     - Single pass only: drop the burned inventory at decade boundaries,
+       mimicking the rolling-horizon boundary (D4).
    * - ``max_age``
      - 999
      - WS3 model age ceiling.
@@ -397,6 +411,38 @@ time; flushed incrementally so a failed run leaves its partial trajectory),
 injected cohort states), ``manifests/<run>-rh-manifest.json`` (run status
 ``optimal``/``degraded``, totals, ``source_sha256`` digests, config
 snapshot, embedded step records).
+
+single-pass-run
+---------------
+
+Run the single-pass whole-run planning baseline: one WS3 solve at t=0 over
+``horizon`` periods (only periods ``1..steps`` implemented), one principal and
+one agent LP over ``steps * period_length`` years, and one 100-year lineage
+replay. This is the baseline ``rh-run`` (decadal re-planning) is compared
+against; the full semantics — including the regenerate-what-left-the-live-pool
+lineage replay — are documented in :doc:`model_semantics`.
+
+.. code-block:: bash
+
+   fresh-salvage single-pass-run examples/single_pass_tsa29.yaml [--json]
+
+Config: the same ``RHRunConfig`` as ``rh-run``. The command forces
+``planning_mode: single_pass`` (the command name is the intent) through a full
+re-validation, then requires ``horizon >= steps`` and the multi-period
+age-lattice preconditions (age smashing enabled, ``period_length`` divisible
+by the smashing width, midpoint off the WS3 regeneration residue); the
+defaults satisfy them.
+
+Artifacts: ``data/<run>-steps.jsonl`` (one record per replayed decade: the
+annual green/burned arrays sliced from the 100-year agent result, the replay's
+``area_burned_ha``, per-decade objectives re-based to the decade start and to
+the run base year; the WS3 fields are populated for decade 1 only, D8),
+``data/<run>-final-state.csv``, ``data/<run>-schedule.csv`` (the one
+``horizon``-period schedule), ``data/<run>-offers.parquet`` /
+``-decisions.parquet`` (both ``steps * period_length`` years),
+``derived/rh_state/step_{k:02d}.are`` for ``k = 0..steps`` (the replay's
+decade-boundary states), and ``manifests/<run>-rh-manifest.json`` with
+``planning_mode="single_pass"`` plus the base-year run totals.
 
 ensemble-run
 ------------
