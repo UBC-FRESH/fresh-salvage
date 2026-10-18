@@ -17,6 +17,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
+| P9 WS4 backend spike (decision-gated backend replacement evaluation) | #40 | `feature/p9-ws4-backend` | Active (spike; decision gate) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -230,6 +231,37 @@ rolling-horizon pipeline.
   - [ ] Complete verification and phase closeout (#16).
 
 Evidence commits: `5582def`, `4007489`, `4114bd5`.
+
+## Phase 9: WS4 Backend Spike (Decision Gate)
+
+Parent issue: #40
+
+Branch: `feature/p9-ws4-backend`
+
+Status: active (spike; seed scoping)
+
+Goal: evaluate whether WS4 (https://github.com/UBC-FRESH/ws4) can replace the
+WS3 wood-supply backend — and possibly the custom principal/agent HiGHS LPs —
+in `fresh-salvage`. WS4 reportedly skips the LP matrix build in favour of a
+heuristic search (simulated annealing) and adds spatial features WS3 lacks
+(patch size distribution targets, roads, mill deliveries) that could better
+capture net value creation per block. This is a spike with a decision gate,
+not a big-bang swap: the WS3-based pipeline (including the Phase 8 results)
+remains the reference until a swap is proven on evidence. Seed scoping:
+`planning/phase9-ws4-backend-spike.md`.
+
+- [ ] P9.1 WS4 intake and API smoke (#41).
+- [ ] P9.2 Schedule-only bridge proof of concept (#42).
+- [ ] P9.3 Coupled subsidy-scan experiment (#43).
+- [ ] P9.4 Evaluation and decision gate (#44).
+
+Gate criteria (continue only if): WS4 ingests TSA29-comparable inputs and
+yields usable schedules; performance is competitive with the current stack; a
+coupling path exists without unacceptable hacks or data fabrication; and the
+result can be explained/defended as cleanly as the current stack. Candidate
+integration paths to assess: (a) drop-in schedule backend, (b)
+offer/take-leave block formulation, (c) full swap to WS4-side policy
+wrappers.
 
 ## Current Next Steps
 

@@ -5,6 +5,13 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Kickoff: Phase 9 WS4 backend spike scoped on `feature/p9-ws4-backend` as a
+  decision-gated evaluation of swapping the WS3 wood-supply backend (and
+  possibly the custom principal/agent LPs) for WS4
+  (https://github.com/UBC-FRESH/ws4). Parent issue #40 with child issues
+  #41-#44; seed planning note `planning/phase9-ws4-backend-spike.md`. The
+  WS3-based pipeline (including the Phase 8 results) remains the reference
+  until the decision gate passes.
 - Fixed CI test collection: `tests/test_ensemble.py` imported `Result` from
   `click.testing`, and `click` is not a declared dependency (recent Typer
   bundles its own copy of click), so collection failed with
