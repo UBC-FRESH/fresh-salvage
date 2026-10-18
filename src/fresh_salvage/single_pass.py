@@ -132,7 +132,9 @@ class _ReplayLineage:
     as fractions of that reference area (``1.0``/``0.0`` for a freshly formed
     regen sub-cohort and for a t=0 cohort at t=0). ``state_index`` indexes the
     initial state row whose agent schedule drives the lineage (``None`` for
-    regen sub-cohorts, which are never harvested).
+    regen sub-cohorts, which are never harvested). ``elapsed_years`` counts the
+    years since formation at the start of the current decade; it indexes the
+    memoized zero-harvest trajectory of a regen sub-cohort.
     """
 
     tsa: str
@@ -146,6 +148,7 @@ class _ReplayLineage:
     burned_before: float
     burn_rate: float
     state_index: int | None
+    elapsed_years: int = 0
 
 
 def replay_lineage(
@@ -166,12 +169,15 @@ def replay_lineage(
     ``harvests``/``salvages`` carry one tuple of ``steps * period_length``
     annual fractions per state row (agent H/S fractions of the t=0 standing
     volume, the same shape :func:`rh.advance_cohort_table` consumes per step).
-    Every decade runs each active lineage through
+    Every decade runs each active t=0 lineage through
     :func:`fresh_salvage.fire.simulate_cohort_years` from its carried live and
     burned inventories, so the LP's dynamics and the replay stay one source of
-    truth; ``burned_stock_reset`` drops the carried burned inventory at every
-    decade start, mirroring the LP's boundary rows (the live trajectory, and so
-    the reported state and burned area, are unaffected).
+    truth; regen sub-cohorts carry no harvest schedule, so one memoized fresh
+    zero-harvest trajectory per burn rate supplies their decade slices with
+    identical floats (:func:`_zero_harvest_decade`). ``burned_stock_reset``
+    drops the carried burned inventory at every decade start, mirroring the
+    LP's boundary rows (the live trajectory, and so the reported state and
+    burned area, are unaffected).
 
     Raises ``SinglePassError`` on shape mismatches, unknown burn rates, missing
     age caps, or an area-conservation violation; nothing is written to disk.
@@ -211,6 +217,10 @@ def replay_lineage(
         _replay_lineage_from_state_row(row, index, burn_rate_multiplier)
         for index, row in enumerate(state.itertuples(index=False))
     ]
+    # One fresh zero-harvest trajectory per distinct burn rate serves every
+    # regen sub-cohort (they are never harvested, D3, so their state is a pure
+    # continuation of the fresh formation state).
+    zero_harvest: dict[float, tuple[fire.FireYearState, ...]] = {}
     for decade in range(steps):
         decade_started = time.monotonic()
         year_start = decade * period_length
@@ -227,10 +237,23 @@ def replay_lineage(
                     f"cohort {_lineage_id(lineage)!r} curve {lineage.curve_id} has "
                     "no yield-curve age cap",
                 )
-            harvest, salvage = _decade_schedules(
-                lineage, harvests, salvages, year_start, year_stop, period_length
-            )
-            years = _simulate_decade(lineage, harvest, salvage, decay_rate)
+            if lineage.state_index is None:
+                years: tuple[fire.FireYearState, ...] | list[fire.FireYearState] = (
+                    _zero_harvest_decade(
+                        lineage,
+                        zero_harvest,
+                        horizon=horizon,
+                        period_length=period_length,
+                        decay_rate=decay_rate,
+                    )
+                )
+                # Regen sub-cohorts are never harvested or salvaged (D3).
+                harvest = salvage = ()
+            else:
+                harvest, salvage = _decade_schedules(
+                    lineage, harvests, salvages, year_start, year_stop, period_length
+                )
+                years = _simulate_decade(lineage, harvest, salvage, decay_rate)
             live_end = years[-1].live_after
             removed = max(0.0, lineage.live_before - live_end)
             burned_decade += (
@@ -248,6 +271,7 @@ def replay_lineage(
                         burned_before=(
                             0.0 if burned_stock_reset else years[-1].burned_after
                         ),
+                        elapsed_years=lineage.elapsed_years + period_length,
                     )
                 )
             regen_area = lineage.reference_area_ha * removed
@@ -260,6 +284,7 @@ def replay_lineage(
                         live_before=1.0,
                         burned_before=0.0,
                         state_index=None,
+                        elapsed_years=0,
                     )
                 )
         snapshot = _replay_state_table(next_active)
@@ -751,17 +776,55 @@ def _decade_schedules(
     year_stop: int,
     period_length: int,
 ) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """Return one lineage's harvest/salvage slice of the current decade.
+    """Return one t=0 lineage's harvest/salvage slice of the current decade.
 
-    Regen sub-cohorts are never harvested (D3), so they carry a zero schedule.
+    Only t=0 cohorts carry a schedule; regen sub-cohorts are never harvested
+    (D3) and take the memoized zero-harvest trajectory path instead.
     """
 
-    if lineage.state_index is None:
-        return ((0.0,) * period_length, (0.0,) * period_length)
     return (
         harvests[lineage.state_index][year_start:year_stop],
         salvages[lineage.state_index][year_start:year_stop],
     )
+
+
+def _zero_harvest_decade(
+    lineage: _ReplayLineage,
+    cache: dict[float, tuple[fire.FireYearState, ...]],
+    *,
+    horizon: int,
+    period_length: int,
+    decay_rate: float,
+) -> tuple[fire.FireYearState, ...]:
+    """Return a regen lineage's decade slice of its memoized trajectory.
+
+    A regenerated lineage is never harvested or salvaged (D3), so from its
+    fresh formation state (``live=1``, ``burned=0``) its inventory follows one
+    recurrence that depends only on the burn rate. A single fresh
+    ``horizon``-year simulation per distinct burn rate therefore serves every
+    regen sub-cohort, and the lineage's decade slice is read at its
+    ``elapsed_years`` offset. The trajectory applies the same year-by-year
+    float operations ``simulate_cohort_years`` would run on the carried state,
+    so the replay stays bit-identical to the per-decade simulation (the
+    ``burned_before`` carry is unused for regen lineages: they salvage nothing,
+    and ``burn_influx`` depends only on live volume).
+    """
+
+    trajectory = cache.get(lineage.burn_rate)
+    if trajectory is None:
+        no_schedule = (0.0,) * horizon
+        trajectory = tuple(
+            fire.simulate_cohort_years(
+                initial_live=1.0,
+                initial_burned=0.0,
+                burn_rate=lineage.burn_rate,
+                harvest_schedule=no_schedule,
+                salvage_schedule=no_schedule,
+                decay_rate=decay_rate,
+            )
+        )
+        cache[lineage.burn_rate] = trajectory
+    return trajectory[lineage.elapsed_years : lineage.elapsed_years + period_length]
 
 
 def _simulate_decade(

@@ -13,6 +13,7 @@ TSA29 bridge, stands, and yields (skips when unavailable).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -287,6 +288,57 @@ def test_replay_records_harvest_and_salvage_areas() -> None:
 
     assert replay.area_harvested_ha[0] == pytest.approx(100.0 * 0.5, rel=1e-9)
     assert replay.area_salvaged_ha[0] == pytest.approx(100.0 * 0.01, rel=1e-9)
+
+
+def test_replay_regen_decade_slices_match_carried_state_simulation() -> None:
+    # The memoized zero-harvest trajectory (P8.5 perf change) must reproduce,
+    # bit for bit, the per-decade simulation the carried-state replay would
+    # run for a regen lineage: same floats, no numeric change.
+    lineage = single_pass._ReplayLineage(
+        tsa="29",
+        ifm="managed",
+        au_id="2901000",
+        stratum_code=STRATUM,
+        curve_id=CURVE_ID,
+        age=5,
+        reference_area_ha=100.0,
+        live_before=0.0,  # overwritten below with the carried state
+        burned_before=0.0,
+        burn_rate=BURN_RATE,
+        state_index=None,
+        elapsed_years=10,
+    )
+    fresh = fire.simulate_cohort_years(
+        initial_live=1.0,
+        burn_rate=BURN_RATE,
+        harvest_schedule=(0.0,) * 20,
+        salvage_schedule=(0.0,) * 20,
+        decay_rate=0.85,
+    )
+    carried = fire.simulate_cohort_years(
+        initial_live=fresh[9].live_after,
+        initial_burned=fresh[9].burned_after,
+        burn_rate=BURN_RATE,
+        harvest_schedule=(0.0,) * 10,
+        salvage_schedule=(0.0,) * 10,
+        decay_rate=0.85,
+    )
+    lineage = replace(
+        lineage, live_before=fresh[9].live_after, burned_before=fresh[9].burned_after
+    )
+    slice_ = single_pass._zero_harvest_decade(
+        lineage, {}, horizon=20, period_length=10, decay_rate=0.85
+    )
+
+    assert [year.live_after for year in slice_] == [
+        year.live_after for year in carried
+    ]
+    assert [year.burn_influx for year in slice_] == [
+        year.burn_influx for year in carried
+    ]
+    assert [year.burned_after for year in slice_] == [
+        year.burned_after for year in carried
+    ]
 
 
 def test_replay_burned_stock_reset_leaves_state_and_burned_area_unchanged() -> None:
