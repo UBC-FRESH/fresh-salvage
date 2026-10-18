@@ -17,7 +17,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
-| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Active (P8.1-P8.4 complete) |
+| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Complete (P8.1-P8.6; pending review/PR) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -239,7 +239,7 @@ Parent issue: #33
 Branch: `feature/p8-single-pass-baseline` (built on PR #32,
 `fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
 
-Status: active (P8.1-P8.5 complete)
+Status: complete (P8.1-P8.6; pending independent review and the PR to `main`)
 
 Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
 principal -> agent -> fire pipeline solved once at t=0 over the full run
@@ -272,7 +272,20 @@ surface, artifact contract, test plan, risks):
       bit-identical, divergence from decade 2, the RH burned-stock boundary
       artifact isolated by the reset arm), and a bit-identical regen-replay
       memoization (replay 73.2 s -> 17.9 s).
-- [ ] P8.6 Docs, examples, CHANGE_LOG, and roadmap closeout (#39).
+- [x] P8.6 Docs, examples, `CHANGE_LOG`, and roadmap closeout (#39):
+      `docs/model_semantics.rst` gained the "Single-Pass Planning Mode"
+      section (interpretation guard, decision units and horizon, D2-D8
+      semantics, replay, decade records, mode constraints) plus updated
+      principal/agent/rolling-horizon sections; `docs/cli.rst` the full
+      `single-pass-run` reference; `docs/ensembles.rst` the `planning_mode`
+      axis with a paired RH-vs-single-pass grid example; single-pass
+      pointers in `docs/index.rst` / `quickstart.rst` / `validation.rst`;
+      `examples/README.md` cross-links the paired runs.
+
+Verification: `python -m ruff check .`, `python -m pytest` (322 tests),
+`sphinx-build -b html docs _build/html -W`, `python -m build`, and
+`twine check dist/*` are clean on the branch (local runs under
+`taskset -c 0-3`, `OMP_NUM_THREADS=4`).
 
 ## Current Next Steps
 
@@ -281,8 +294,9 @@ issue #20 and agent child issue #21. Completed execution steps are recorded in
 issues #22-#27. Principal fire and decay coefficient follow-up work is tracked
 in issue #28.
 
-Phase 8 (single-pass planning baseline, parent issue #33) is active on
-`feature/p8-single-pass-baseline`; see the Phase 8 section above.
+Phase 8 (single-pass planning baseline, parent issue #33) is complete on
+`feature/p8-single-pass-baseline` (P8.1-P8.6; pending independent review and
+the PR to `main`); see the Phase 8 section above.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity

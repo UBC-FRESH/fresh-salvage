@@ -417,32 +417,80 @@ single-pass-run
 
 Run the single-pass whole-run planning baseline: one WS3 solve at t=0 over
 ``horizon`` periods (only periods ``1..steps`` implemented), one principal and
-one agent LP over ``steps * period_length`` years, and one 100-year lineage
-replay. This is the baseline ``rh-run`` (decadal re-planning) is compared
-against; the full semantics — including the regenerate-what-left-the-live-pool
-lineage replay — are documented in :doc:`model_semantics`.
+one agent LP over ``steps * period_length`` years, and one lineage replay that
+regenerates everything that leaves the live pool at each decade boundary.
+This is the baseline ``rh-run`` (decadal re-planning) is compared against;
+the full semantics — the interpretation guard (deterministic fire, so the
+comparison measures re-planning and structural effects, not information
+value), the decadal growth surface, the grade clock, the burned-stock
+carry/reset, and the D7/D8 record-comparability rules — are in
+:doc:`model_semantics`.
 
 .. code-block:: bash
 
    fresh-salvage single-pass-run examples/single_pass_tsa29.yaml [--json]
 
-Config: the same ``RHRunConfig`` as ``rh-run``. The command forces
-``planning_mode: single_pass`` (the command name is the intent) through a full
-re-validation, then requires ``horizon >= steps`` and the multi-period
-age-lattice preconditions (age smashing enabled, ``period_length`` divisible
-by the smashing width, midpoint off the WS3 regeneration residue); the
-defaults satisfy them.
+Config: the same ``RHRunConfig`` as `rh-run`_. The command forces
+``planning_mode: single_pass`` (the command name is the intent) through a
+full re-validation, so the single-pass cross-field preconditions still fail
+fast at this boundary:
+
+- ``planning_mode: single_pass`` requires ``horizon >= steps`` — the one WS3
+  solve must cover every implemented period (D1).
+- It also requires the P8.1 schedule age-lattice preconditions: age smashing
+  enabled, ``period_length`` divisible by the smashing width, and the
+  smashing midpoint off the WS3 regeneration residue (the 10/10/5 defaults
+  satisfy them).
+- ``burned_stock_reset: true`` is accepted here (and rejected with
+  ``rolling_horizon``): it drops the burned inventory at decade boundaries,
+  mimicking the rolling-horizon boundary (D4).
+
+A minimal config (every other field takes the ``rh-run`` default):
+
+.. code-block:: yaml
+
+   run_id: tsa29-single-pass
+   stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
+   yields_path: /path/to/femic-tsa29/woodstock_yields.csv
+   bridge_path: /path/to/femic-tsa29/ws3_bridge
+   base_year: 2025
+   horizon: 15          # WS3 periods solved at t=0 (>= steps)
+   period_length: 10    # implemented years per decade
+   steps: 10            # 10 x 10 = 100 LP years
+   planning_mode: single_pass
+   burned_stock_reset: false
+   output_root: outputs/single_pass_100yr_dev
 
 Artifacts: ``data/<run>-steps.jsonl`` (one record per replayed decade: the
-annual green/burned arrays sliced from the 100-year agent result, the replay's
-``area_burned_ha``, per-decade objectives re-based to the decade start and to
-the run base year; the WS3 fields are populated for decade 1 only, D8),
-``data/<run>-final-state.csv``, ``data/<run>-schedule.csv`` (the one
-``horizon``-period schedule), ``data/<run>-offers.parquet`` /
+annual green/burned arrays sliced from the 100-year agent result, the
+replay's ``area_burned_ha``, per-decade objectives re-based to the decade
+start and to the run base year; the WS3 fields are populated for decade 1
+only, D8), ``data/<run>-final-state.csv``, ``data/<run>-schedule.csv`` (the
+one ``horizon``-period schedule), ``data/<run>-offers.parquet`` /
 ``-decisions.parquet`` (both ``steps * period_length`` years),
 ``derived/rh_state/step_{k:02d}.are`` for ``k = 0..steps`` (the replay's
 decade-boundary states), and ``manifests/<run>-rh-manifest.json`` with
 ``planning_mode="single_pass"`` plus the base-year run totals.
+
+Notable failure codes: ``single_pass_failed`` (wraps any fatal layer error;
+the inner code, such as ``ws3_solve_not_optimal`` or
+``rh_area_conservation_failed``, is quoted in the message),
+``single_pass_run_failed`` (the command-level fallback, including config
+parse and validation errors), the library guards
+``single_pass_planning_mode_required`` / ``single_pass_horizon_too_short``
+(the CLI's forced re-validation normally reports these as config errors),
+and the replay guards ``single_pass_schedule_shape_mismatch``,
+``single_pass_burn_rate_unknown``, ``single_pass_burn_rate_invalid``,
+``single_pass_curve_age_cap_missing``,
+``single_pass_fire_simulation_failed``,
+``single_pass_state_empty_after_decade``, ``single_pass_cohort_alignment``,
+and ``single_pass_objective_decomposition_missing``.
+
+**Not comparable across modes: the WS3 objective (D8).** Single pass solves
+the WS3 problem once and fills the WS3 fields on decade 1 only; rolling
+horizon solves one WS3 problem per step. Compare the principal/agent
+objectives (decade-start re-based in the records, base-year re-based in the
+manifest totals) instead, never a summed WS3 objective.
 
 ensemble-run
 ------------

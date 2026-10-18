@@ -1,6 +1,6 @@
 # Phase 8: Single-Pass 100-Year Planning Baseline
 
-Status: active (P8.1-P8.5 implemented; P8.6 open)
+Status: active (P8.1-P8.6 implemented; pending independent review and PR)
 
 Branch: `feature/p8-single-pass-baseline` (cut from
 `origin/fix/schedule-group-volume-dedup` at `9b5a0a0`, the PR #32 head;
@@ -597,7 +597,7 @@ snapshots byte-identical modulo timing fields). The LP `addRow`/CSR
 vectorization (R2) remains future work; the probe shows it is not required at
 `T=100`.
 
-### P8.6: docs and closeout (#39)
+### P8.6: docs and closeout (#39) — implemented
 
 This covers `docs/model_semantics.rst` (a new "Single-pass baseline"
 section plus affected RH sections), `docs/cli.rst` (`single-pass-run`; a
@@ -605,6 +605,49 @@ minimal section landed with P8.4), `docs/architecture.rst` (minimal notes
 landed with P8.4), `docs/ensembles.rst` (the `planning_mode` axis),
 `examples/single_pass_tsa29.yaml` (landed with P8.4), `CHANGE_LOG.md`, the
 ROADMAP closeout, and the PR description.
+
+Implementation record (this branch):
+
+- `docs/model_semantics.rst`: the new section is titled "Single-Pass
+  Planning Mode" (sibling to "The Rolling-Horizon Loop") and covers the
+  purpose, the deterministic-fire interpretation guard (no value of
+  information), decision units and the `steps x period_length` horizon,
+  D2 (unclamped valuation ages, absolute per-ha volumes, the 75
+  zero-t0-volume cohorts), D5 (grade clock and the burned-stock-wraps
+  note), D4/D6 (continuous carry default and the decade reset), the
+  lineage replay (formation-area tracking, midpoint regeneration, 1e-6
+  area conservation, `step_{k:02d}.are` snapshots), D7/D8 (decade-start
+  versus base-year objectives; WS3 fields decade 1 only, so the summed
+  WS3 objective is not comparable across modes), and the mode constraints
+  (`horizon >= steps`, age smashing enabled, `period_length % width == 0`,
+  midpoint off the WS3 regeneration residue). The principal LP section
+  gained the per-cohort WS3 ceiling row and the per-year growth
+  coefficients; the agent LP section the growth surface and the
+  `v_k / v_{k+1}` boundary rescaling; the rolling-horizon section a
+  pointer; the known-limitations list the mode-conditional burned-stock
+  boundary, the WS3-objective comparability rule, and the
+  replayed-not-reoptimized regenerated stands.
+- `docs/cli.rst`: full `single-pass-run` reference — the forced/validated
+  config fields, a minimal config example, the artifact list, the notable
+  failure codes (`single_pass_failed` wrapping layer codes,
+  `single_pass_run_failed`, the library guards, and the replay guards),
+  and the D8 non-comparability callout.
+- `docs/ensembles.rst`: `planning_mode` as an ensemble axis, a paired
+  RH-vs-single-pass grid example (cartesian mixed grids constrained by the
+  per-scenario `RHRunConfig` validation; the `burned_stock_reset` comparison
+  is single-pass-only), and a note on which fields to read across modes.
+- Pointers: `docs/index.rst` (hero paragraph, five-layer pipeline item 5,
+  documentation map), `docs/quickstart.rst` (a single-pass step-3 paragraph,
+  artifact note, and next-steps bullets), `docs/validation.rst` (Phase 8
+  evidence pointer, RH unchanged). `examples/README.md` cross-links the
+  paired runs; `examples/single_pass_tsa29.yaml` itself landed with P8.4.
+- Every documented field, code, and artifact was cross-checked against
+  `single_pass.py`, `principal.py`, `agent.py`, `rh.py`, `models.py`, and
+  `cli.py`; nothing aspirational is documented.
+- Verification (local, `taskset -c 0-3`, `OMP_NUM_THREADS=4`): `python -m
+  ruff check .` clean; `python -m pytest` (322 tests) all pass;
+  `sphinx-build -b html docs _build/html -W` clean; `python -m build` and
+  `twine check dist/*` pass.
 
 ## 7. Artifact contract (single pass)
 

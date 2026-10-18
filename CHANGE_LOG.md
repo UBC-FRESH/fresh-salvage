@@ -5,6 +5,45 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 8 P8.6 (issue #39): the single-pass documentation suite and the
+  Phase 8 closeout. Documentation only — no code changes.
+  - `docs/model_semantics.rst` gains a "Single-Pass Planning Mode" section
+    (sibling to "The Rolling-Horizon Loop") covering the purpose and the
+    deterministic-fire interpretation guard (the RH-vs-single-pass
+    difference measures re-planning and structural effects, not information
+    value); decision units and the `steps x period_length` horizon; the
+    decadal growth surface (D2: unclamped valuation ages, absolute per-ha
+    volumes, the zero-t0-volume cohort behaviour); the grade clock (D5);
+    burned-stock carry and reset semantics (D4/D6); the lineage replay
+    (formation-area tracking, midpoint regeneration, 1e-6 area
+    conservation, per-decade snapshots); the decade-record and manifest
+    contract versus `rh-run` (D7/D8: decade-start versus base-year
+    objectives, WS3 fields on decade 1 only, so a summed WS3 objective is
+    not comparable across modes); and the mode constraints (`horizon >=
+    steps`, age smashing enabled, `period_length` divisible by the smashing
+    width, midpoint off the WS3 regeneration residue).
+  - The principal/agent LP sections now describe the per-cohort WS3 ceiling
+    row and the per-year growth coefficients; the rolling-horizon section
+    points at the new mode; the Known Limitations list covers the
+    mode-conditional burned-stock boundary, the WS3-objective
+    comparability rule, and the replayed-not-reoptimized regenerated
+    stands.
+  - `docs/cli.rst`: the full `single-pass-run` reference (fields the command
+    forces/validates, a minimal config example, artifacts, failure codes,
+    and the D8 non-comparability callout). `docs/ensembles.rst`:
+    `planning_mode` as an ensemble axis with a paired RH-vs-single-pass
+    grid example and the single-pass-only constraint on
+    `burned_stock_reset`.
+  - Pointers in `docs/index.rst`, `docs/quickstart.rst`, and
+    `docs/validation.rst`; `examples/README.md` cross-links the paired
+    runs (`examples/single_pass_tsa29.yaml` landed with P8.4).
+  - Every documented field, code, and artifact was cross-checked against
+    `single_pass.py`, `principal.py`, `agent.py`, `rh.py`, `models.py`, and
+    `cli.py`.
+  - Verification (local, `taskset -c 0-3`, `OMP_NUM_THREADS=4`): `python -m
+    ruff check .` clean; `python -m pytest` (322 tests) all pass;
+    `sphinx-build -b html docs _build/html -W` clean; `python -m build` and
+    `twine check dist/*` pass.
 - Phase 8 P8.5 (issue #38): full-TSA29 paired RH vs single-pass evidence at an
   active subsidy, plus a bit-identical replay memoization.
   - Three-arm evidence run (configs and run outputs under

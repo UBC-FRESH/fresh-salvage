@@ -39,7 +39,9 @@ standing volume is its area times the curve yield (m3/ha) at the cohort
 age, with linear interpolation between curve points and constant endpoint
 extension beyond the tabulated age range. The principal and agent LPs run
 at 1-year timesteps over these cohorts; the rolling-horizon engine
-implements 10 years per step and re-solves WS3 between steps.
+implements 10 years per step and re-solves WS3 between steps, while the
+single-pass mode solves one WS3 schedule and one LP pair over the whole run
+(see `Single-Pass Planning Mode`_ below).
 
 How the WS3 input files are built
 ---------------------------------
@@ -207,6 +209,9 @@ burned wood:
    cum_offer[c,y] = sum_{t<=y} offer[c,t]           (definition rows)
    sum_y offer[c,y] <= 1                            (offer once)
    sum_c green_volume_m3[c] * offer[c,y] <= aac_annual_m3   (AAC ceiling)
+   green_volume_m3[c,y] * offer[c,y] <= ceiling[c,y]
+                                                    (per-cohort WS3 ceiling,
+                                                     when a schedule is given)
    sum_c burned_volume_m3[c] * offer[c,y] <= burned_limit_annual_m3
                                                     (only when configured)
 
@@ -247,6 +252,18 @@ cohort's standing fractions, and offer-once is exactly volume conservation.
 The LP is pure linear — no binaries, no thresholding — and zero offer rows
 are emitted explicitly so downstream consumers see a complete panel.
 
+**Per-cohort ceilings and per-year volumes.** When a WS3 schedule is
+supplied, every cohort-year also carries the row
+``green_volume_m3[c,y] * offer[c,y] <= ceiling[c,y]``, which augments (never
+replaces) the global AAC row. The rolling-horizon engine broadcasts its one
+decadal ceiling to each implemented year; the single-pass engine passes one
+ceiling per year from the year-indexed WS3 ceiling matrix (each period's
+harvest split uniformly over its years). Without a growth surface the
+coefficients ``green_volume_m3[c,y]`` / ``burned_volume_m3[c,y]`` are the
+static parsed t=0 volumes in every year (the rolling-horizon path); the
+single-pass growth surface makes them decade-scaled per-year series (see
+`Single-Pass Planning Mode`_).
+
 The Agent LP
 ------------
 
@@ -274,6 +291,17 @@ dynamics above:
    S[c,t] <= B[c,t-1] + R * (V[c,t-1] - H[c,t])     (salvage feasibility)
    sum_t H[c,t] + sum_t S[c,t] <= 1                 (no double selling)
 
+``H``/``S``/``V``/``B`` are fractions of the cohort's initial standing
+volume (its area fraction for an age-homogeneous cohort). Rolling horizon
+prices every year at the static t=0 volume. Single pass adds the same
+decadal growth surface as the principal: every margin in year ``y`` uses
+``area_ha * v_k(y)``, and the burned inventory carried across a decade
+boundary is re-expressed in the next decade's per-ha units by
+``v_k / v_{k+1}`` — a linear, volume-conserving rescaling that is an exact
+identity when the horizon is at most one period. A boundary where
+``v_{k+1} = 0 < v_k`` cannot be re-expressed and fails fast
+(``agent_degenerate_growth_ratio``); see `Single-Pass Planning Mode`_.
+
 Prices are the development type's volume-weighted average grade prices
 (weighted by the configured ``green_prices``), and burned prices carry the
 burned price discount (0.65) through the prompt-salvage grade transition
@@ -291,7 +319,9 @@ The Rolling-Horizon Loop
 ``fresh_salvage.rh`` coordinates the three solvers over decadal steps. Each
 step *solves* a full ``horizon``-period WS3 schedule (dev profile 15 periods
 of 10 years) but *implements* only the first period; the principal/agent LPs
-cover exactly the implemented window at 1-year timesteps:
+cover exactly the implemented window at 1-year timesteps. The single-pass
+baseline (`Single-Pass Planning Mode`_) runs the same pipeline with one t=0
+solve and no mid-horizon re-planning:
 
 .. code-block:: text
 
@@ -344,7 +374,166 @@ carry-over has no representation on the WS3 side; (2) the 0.85/yr decay
 leaves under 20% of unsalvaged burned volume after 10 years, so the
 truncated tail is small; (3) within-step salvage is fully modelled by the
 agent LP. The predecessor rolling-horizon scripts carried no burned stock
-across steps either.
+across steps either. Single pass carries burned inventory continuously by
+default and can mimic this boundary with ``burned_stock_reset`` (see
+`Single-Pass Planning Mode`_).
+
+Single-Pass Planning Mode
+-------------------------
+
+``fresh_salvage.single_pass`` runs the same coupled WS3 -> principal ->
+agent -> fire pipeline as the rolling-horizon loop, but solves it **once at
+t=0** over the whole run — ``steps x period_length`` years (10 x 10 = 100 by
+default) — and never re-plans mid-horizon. It is the baseline that
+``rh-run`` (which re-plans every decade) is compared against. The mode is
+selected by ``planning_mode: single_pass`` on ``RHRunConfig``; the
+``single-pass-run`` command forces it (see :doc:`cli`).
+
+**Interpretation guard: deterministic fire.** The LPs and the replay use
+the expected annual burn rate ``R = 1/MFRI``
+(``fire.annual_burn_rate_for_stratum``) in both modes, so re-planning never
+sees information single pass did not already have. The
+RH-versus-single-pass difference therefore measures **re-planning and
+structural effects** — the burned-stock boundary reset, growth handling,
+the grade clock, the re-seeded principal burned path, and WS3
+re-optimization from a replayed state — and **not the value of
+information**. A value-of-information study would need stochastic fire
+realizations, which are out of scope.
+
+**Decision units and horizon.** Single pass runs the same boundary parse
+and period-0 inventory injection as rolling horizon and builds the same
+``horizon``-period WS3 problem ``rh-run`` solves at step 1 (D1); only
+periods ``1..steps`` are implemented. The one schedule is mapped back onto
+the t=0 cohorts by ``rh.schedule_cohort_period_volumes`` — a WS3 harvest of
+a regenerated stand inside the implemented periods fails fast (D3; the LP
+cohort set is the t=0 inventory) — and ``rh.annual_ceiling_matrix`` splits
+each period's harvest uniformly into annual per-cohort ceilings. One
+principal LP and one agent LP then cover ``steps x period_length`` years at
+1-year timesteps against those ceilings and offers, and the run ends with
+the 100-year lineage replay below. Because the one solve must cover every
+implemented period, ``planning_mode: single_pass`` requires
+``horizon >= steps``.
+
+**Decadal growth-aware volume coefficients (D2).** The single-pass LPs are
+given each t=0 cohort's per-ha volume at the *unclamped* decadal age
+``age0 + period_length*k`` (``principal.decadal_per_ha_volumes``), with the
+boundary-parser curve lookup: linear interpolation inside the tabulated age
+range and constant extension beyond the last tabulated age. That is the WS3
+period valuation convention, so the LP coefficients stay consistent with
+the per-period WS3 ceilings bound to the same years; the
+``rh.curve_age_caps`` clamp still governs state aging only. The surface
+carries **absolute per-ha volumes** (m3/ha), not a ratio to the t=0 volume:
+75 of the 1,608 t=0 bridge cohorts have zero per-ha volume at t=0 and grow
+into volume later (~5.8% of the TSA area), so a ratio is undefined. Such a
+cohort keeps its live basis in area units and has its burn influx scaled by
+``v_k`` for every decade — including decade 0, where the scale is
+``v_0 = 0``. Year 0 always keeps the parsed t=0 volumes bit-exactly, so a
+run whose LP horizon is at most one period is bit-identical to the
+rolling-horizon LP (equivalence tests).
+
+- *Principal.* Green and burned volumes in year ``y`` scale by their
+  decade's per-ha volume in ``annual_offer``, ``annual_burn_loss``, the AAC
+  row, the per-year ceiling row, and the burned-cap row. The predetermined
+  fire/decay path keeps the live basis on the parsed t=0 volume (live area
+  when ``v_0 = 0``) and scales each annual burn influx by the decade's
+  per-ha volume, so burn influx in decade ``k`` is ``R * live_area * v_k``;
+  burned inventory is carried in m3.
+- *Agent.* ``H``/``S``/``V``/``B`` stay fractions of the t=0 standing
+  volume (area fractions for an age-homogeneous cohort); every margin in
+  year ``y`` uses ``area_ha * v_k(y)``. Burned inventory is carried in the
+  current decade's per-ha units, so the first-year burned and salvage rows
+  of decade ``k+1`` multiply the ``B[t-1]`` coefficient by
+  ``v_k / v_{k+1}`` — linear, volume-conserving, and an exact identity when
+  the horizon is at most one period. When ``v_{k+1} = 0 < v_k`` the build
+  fails fast (``agent_degenerate_growth_ratio``); no such boundary occurs
+  on the current TSA29 curves and t=0 cohorts within 100 years.
+
+**Grade clock (D5).** Single pass prices the annual burned grade mix at
+index ``year mod period_length`` (``grade_clock_period=period_length``),
+the same indices a rolling-horizon window would use, so grade pricing is
+not a confounder between modes. Burned stock aged more than one period is
+priced at that wrapped residue; the wrap is intended and mirrors the RH
+window index. Rolling horizon passes no clock, so its LP-year index is
+unchanged.
+
+**Burned-stock semantics (D4/D6).** By default single pass carries burned
+inventory continuously over the 100 years: the agent's burned balance keeps
+``B[t-1]`` across decade boundaries, and the principal's predetermined
+burned path is seeded once at t=0. The optional
+``burned_stock_reset: bool = False`` flag resets it at decade boundaries,
+mimicking the rolling-horizon boundary above: the agent's first-year burned
+and salvage rows drop the carried ``B[t-1]`` coefficient, and the
+principal's burned path is re-seeded from ``burned_volume_m3 * v_k / v_0``
+with its ``annual_burn_loss`` decay exponent restarting at
+``year mod L``. The replay drops the carried burned inventory at the same
+boundaries, so the replay and the LP agree; the live trajectory — and
+therefore the reported state and ``area_burned_ha`` — is identical either
+way. ``burned_stock_reset`` is rejected with ``planning_mode:
+rolling_horizon``.
+
+**Lineage replay.** The 100-year replay runs in decade blocks from the t=0
+state, re-entering ``fire.simulate_cohort_years`` each decade with the
+carried live and burned inventories, so the LP rows and the replay keep one
+source of truth for the dynamics. Each t=0 cohort is tracked as a lineage
+by its *formation* area (its t=0 area) plus live/burned fractions of that
+reference. At every boundary, the area that left the live pool during the
+decade (green harvest plus burn influx; salvage only reclassifies burned
+area) regenerates as a regen sub-cohort in the same development type at
+``age_smashing.midpoint`` — the convention ``rh.advance_cohort_table`` uses.
+Survivors age by ``+period_length`` clamped to the curve age cap; regen
+sub-cohorts age by ``+period_length`` per decade (clamped), are never
+harvested (D3), stay exposed to fire, and any burned share regenerates
+again at the next boundary. Zero-harvest regen trajectories are memoized
+per distinct burn rate with the identical float operations, so the
+optimization is bit-identical to re-simulating each lineage. Area is
+conserved to 1e-6 relative at every boundary; one state snapshot is written
+per boundary (``derived/rh_state/step_{k:02d}.are`` for ``k = 0..steps``),
+and ``final-state.csv`` is the last snapshot. (RH regenerates removed area
+at the same midpoint age while WS3 itself places clear-cut area at age 0;
+the replay mirrors RH — the WS3 t=0 solve only notices after period
+``steps``.)
+
+**Decade records and the manifest (D7/D8).** A single-pass run emits
+``steps`` ``RHStepRecord`` lines in ``data/<run>-steps.jsonl``, the same
+schema as ``rh-run``: the decade's slice of the annual green and burned
+harvest volumes from the 100-year agent result, the replay's
+``area_burned_ha``, and per-decade objectives. Comparability rules:
+
+- ``principal_objective_value`` / ``agent_objective_value`` are re-based to
+  the decade start, directly comparable with rolling-horizon step records:
+  the principal objective is undiscounted (base-year and decade-start
+  values coincide), and the agent's decade value is the t=0 LP's decade
+  decomposition multiplied by ``(1+r)^(L*k)``. The matching
+  ``*_objective_value_base_year`` fields re-base both to the run base year
+  (the agent's by ``(1+r)^-(L*k)``).
+- The manifest's ``total_principal_objective`` and
+  ``total_agent_objective_base_year`` are summed from the emitted records
+  in both modes; for rolling horizon the agent total multiplies each step's
+  NPV by ``(1+r)^-(L*(k-1))``, while the single-pass LP already discounts
+  from t=0.
+- **The WS3 fields (status, objective, and build/solve seconds) are
+  populated for decade 1 only** — single pass has one horizon-period solve
+  while rolling horizon has one per decade — **so a summed WS3 objective is
+  not comparable across modes** (D8). The one-time WS3 and LP solve seconds
+  are attributed to decade 1; each record's ``wall_seconds`` is that
+  decade's replay time (the only per-decade work in single pass).
+
+The manifest sets ``planning_mode="single_pass"`` and derives the run
+``status`` from the one WS3 solve. Artifacts: the one schedule
+(``data/<run>-schedule.csv``), the run-level offers and decisions
+(``data/<run>-offers.parquet`` / ``-decisions.parquet``), the state
+snapshots, the decade records, the final state, and the manifest.
+
+**Mode constraints.** ``planning_mode: single_pass`` requires
+``horizon >= steps`` plus the age-lattice preconditions of the P8.1
+ceiling mapper: age smashing enabled, ``period_length`` divisible by the
+smashing width, and the smashing midpoint off the WS3 regeneration residue
+(``(midpoint - 0) mod width != 0``; the 10/10/5 defaults satisfy it). The
+``single-pass-run`` command forces the mode through a full re-validation;
+``rh.run_rh`` rejects a ``single_pass`` config and ``run_single_pass``
+rejects a ``rolling_horizon`` one, and ``rh.run_planning`` is the shared
+dispatcher used by the CLI, the ensemble worker, and the sensitivity
+driver.
 
 Severity And Burned Volume At Ingestion
 ---------------------------------------
@@ -538,9 +727,21 @@ Known Limitations
 - **Upper-bound coverage.** The FS-VAL-02 coverage factor is a whole-polygon
   area ratio, not a spatial intersection; rated-stand salvageable volume is
   an upper bound.
-- **Burned-stock reset.** Unsalvaged burned area resets to regeneration at
-  the rolling-horizon step boundary; no burned-volume inventory carries
-  across steps (documented deviation above).
+- **Burned-stock boundary, mode-conditional.** Rolling horizon resets
+  unsalvaged burned area to regeneration at every step boundary; no
+  burned-volume inventory carries across steps (documented deviation
+  above). Single pass carries burned inventory continuously by default;
+  ``burned_stock_reset: true`` makes it mimic the rolling-horizon boundary
+  (D4/D6).
+- **WS3-objective comparability.** Compare modes through the decade records'
+  principal/agent objectives and the base-year manifest totals; the summed
+  WS3 objective is not comparable across modes, because single pass solves
+  the WS3 problem once while rolling horizon solves once per decade (D8).
+- **Single-pass regenerated stands are replayed, not re-optimized.** The
+  single-pass LP cohort set is the t=0 inventory; area that regenerates
+  during the run is replayed and stays exposed to fire, but is never
+  harvested, and a WS3 harvest of an in-horizon regenerated stand fails
+  fast (D3).
 - **WS3 workers numerics.** WS3 step objectives shift slightly with the
   configured worker count (±0.014% observed); hold ``workers`` fixed for
   cross-run comparisons.

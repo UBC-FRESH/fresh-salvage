@@ -2,11 +2,13 @@ Scenario Ensembles
 ==================
 
 A sensitivity analysis over this model means running the full 100-year
-rolling-horizon loop once per scenario, where a scenario is one combination
-of values from a grid over named ``RHRunConfig`` fields. The ensemble driver
-exists to run those scenarios in parallel. This page covers why the driver
-exists, the grid syntax, the parallelism and failure models, performance
-budgeting, and a worked subsidy flip-point sweep.
+coupled pipeline once per scenario, where a scenario is one combination
+of values from a grid over named ``RHRunConfig`` fields. A scenario runs the
+rolling-horizon loop by default; ``planning_mode: single_pass`` makes it the
+one-solve baseline instead (see `Paired RH vs Single-Pass Runs`_ below). The
+ensemble driver exists to run those scenarios in parallel. This page covers
+why the driver exists, the grid syntax, the parallelism and failure models,
+performance budgeting, and a worked subsidy flip-point sweep.
 
 One-at-a-Time Sensitivity
 -------------------------
@@ -95,6 +97,52 @@ in sorted axis order, normalized for file names (for example
 mapping yields the single ``baseline`` scenario. Records and artifacts are
 written in grid order regardless of completion order, so identical inputs
 give byte-comparable scenario tables.
+
+Paired RH vs Single-Pass Runs
+-----------------------------
+
+``planning_mode`` is a flat ``RHRunConfig`` field, so it is a valid ensemble
+axis and one grid can hold both engines. The scenario worker dispatches
+through ``rh.run_planning``, which routes ``rolling_horizon`` to
+``rh.run_rh`` and ``single_pass`` to ``single_pass.run_single_pass``; each
+scenario record carries its ``planning_mode`` override and each run manifest
+its ``planning_mode``, so the arms stay separable. All other axis values are
+shared, so the paired difference is the planning engine itself.
+
+.. code-block:: yaml
+
+   ensemble_id: tsa29-rh-vs-single-pass
+   base:
+     stands_path: outputs/full_tsa/data/tsa29-full-stands.parquet
+     yields_path: /path/to/femic-tsa29/woodstock_yields.csv
+     bridge_path: /path/to/femic-tsa29/ws3_bridge
+     base_year: 2025
+     horizon: 15
+     period_length: 10
+     steps: 10
+     workers: 1
+     subsidy_rate_per_m3: 30.0   # active-subsidy comparison surface
+   axes:
+     planning_mode: [rolling_horizon, single_pass]
+   max_workers: 2
+   output_root: outputs/ensemble_p8_pair
+
+Every expanded scenario must form a valid ``RHRunConfig``
+(``ensemble_scenario_invalid`` otherwise), which constrains mixed grids: a
+single-pass arm needs ``horizon >= steps`` and the age-lattice preconditions
+(see :doc:`model_semantics`), and ``burned_stock_reset: true`` is rejected
+with ``rolling_horizon``. So the continuous-carry vs decade-reset comparison
+is a single-pass-only grid (``planning_mode: [single_pass]`` crossed with
+``burned_stock_reset: [false, true]``); a cartesian grid that pairs
+``burned_stock_reset: true`` with ``rolling_horizon`` fails at expansion
+time, by design.
+
+Read the pair through the shared decade-record and manifest fields: the
+principal/agent objectives, the annual harvest arrays, and
+``total_area_burned_ha``. The summed WS3 objective is **not** comparable
+across modes (one solve vs one per decade, D8), and the single-pass schedule
+and run-level offers/decisions replace the per-step artifacts — see
+:doc:`cli` for both artifact sets.
 
 Parallelism Model
 -----------------
