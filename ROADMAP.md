@@ -239,7 +239,7 @@ Parent issue: #33
 Branch: `feature/p8-single-pass-baseline` (built on PR #32,
 `fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
 
-Status: active (P8.1 complete)
+Status: active (P8.1-P8.3 complete)
 
 Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
 principal -> agent -> fire pipeline solved once at t=0 over the full run
@@ -252,10 +252,13 @@ surface, artifact contract, test plan, risks):
 
 - [x] P8.1 Schedule -> year-indexed ceiling matrix and per-year principal
       ceilings (#34).
-- [ ] P8.2 Decadal growth-aware volume coefficients in principal and agent
-      (#35).
-- [ ] P8.3 Grade-clock option and burned-stock continuity/reset semantics
-      (#36).
+- [x] P8.2 Decadal growth-aware volume coefficients in principal and agent
+      (#35): unclamped decadal valuation (`decadal_per_ha_volumes`), the
+      `decadal_volume_scale` cohort surface, agent boundary rescaling with
+      a structured fail-fast, and RH-equivalence tests.
+- [x] P8.3 Grade-clock option and burned-stock continuity/reset semantics
+      (#36): `grade_clock_period`, `burned_stock_reset` in both LPs, and
+      carry-versus-reset analytic tests.
 - [ ] P8.4 `single_pass` orchestrator, `single-pass-run` CLI, ensemble
       dispatch, oracle test (#37).
 - [ ] P8.5 Full-TSA29 tractability probe and paired RH vs single-pass

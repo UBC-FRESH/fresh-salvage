@@ -1,6 +1,6 @@
 # Phase 8: Single-Pass 100-Year Planning Baseline
 
-Status: active (P8.1 implemented; P8.2-P8.6 open)
+Status: active (P8.1-P8.3 implemented; P8.4-P8.6 open)
 
 Branch: `feature/p8-single-pass-baseline` (cut from
 `origin/fix/schedule-group-volume-dedup` at `9b5a0a0`, the PR #32 head;
@@ -101,6 +101,69 @@ at most one period:
 | D7 | NPV comparability: per-decade objective values are re-based to the decade start, which makes them comparable with RH step records. Run totals are re-based to the base year for both modes. | The single-pass agent objective discounts from t=0, while each RH step discounts from its own start. | RH step records are unchanged. New run totals are added. |
 | D8 | WS3 fields in decade records: populated for decade 1 only (the rest are null or 0). The summed WS3 objective is **not** comparable across modes. | Single pass has one WS3 solve. | RH records unchanged. |
 | D9 | The schedule dedup fix (PR #32, `ws3._apportion_group_volumes`) applies to both modes. | This keeps the ceilings correct in both modes. | Already in RH. |
+
+### 3.1 Decision notes (P8.2/P8.3 implementation session)
+
+Supervisor-approved resolutions applied while implementing P8.2/P8.3. They
+supersede the corresponding spec text in section 6 and the "Reduction to RH"
+clip in D2.
+
+- **D2 valuation age (supersedes the cap clamp).** Per-ha volume is taken at
+  the UNCLAMPED decadal age `age0 + L*k` with the boundary-parser lookup
+  (linear interpolation inside the tabulated range, constant extension beyond
+  the last tabulated age). That is the WS3 valuation convention, so the
+  principal/agent coefficients stay consistent with the WS3 per-period
+  ceilings. `rh.curve_age_caps` is NOT used for valuation; it still governs RH
+  state aging (unchanged). The LP-versus-WS3 age-clamp asymmetry of risk R3
+  is therefore gone.
+- **Growth surface representation.** `PrincipalCohort.decadal_volume_scale` /
+  `AgentCohort.decadal_volume_scale` hold ABSOLUTE per-ha volumes (m3/ha),
+  one per decade, produced by `principal.decadal_per_ha_volumes`. Absolute
+  volumes (not `v_k / v_0` ratios) are required because 75 of the 1,608 t=0
+  bridge cohorts have zero t=0 per-ha volume and grow into volume later
+  (~5.8% of the total TSA29 area); their ratio is undefined. Year 0 always
+  keeps the parsed t=0 volumes bit-exactly, so a horizon of at most `L` is
+  bit-identical to the RH LP.
+- **Principal growth path.** The predetermined fire/decay path keeps the live
+  basis on the parsed t=0 volume (live AREA when `v_0 = 0`) and scales each
+  annual burn influx by `v_k / v_0` (or `v_k`), so burn influx in decade `k`
+  is `R * live_area * v_k`; burned inventory is carried in m3. Green and
+  burned volumes scale in `annual_offer`, `annual_burn_loss`, the AAC row,
+  the ceiling-row coefficient, and the burned-cap row.
+- **Agent burned-inventory rescaling (R5), approved as specified.** The
+  first-year burned and salvage rows of decade `k+1` multiply the `B[t-1]`
+  coefficient by `v_k / v_{k+1}`: linear, volume-conserving, and an exact
+  identity when the horizon is at most `L`. When `v_{k+1} = 0 < v_k` the
+  build fails fast with `agent_degenerate_growth_ratio`
+  (`agent._decade_boundary_ratio`). Two zero-volume decades carry no
+  inventory (ratio 1.0); a zero decade before a positive one is
+  representable (ratio 0). Real-data check: on the 108 TSA29 smashed yield
+  curves and all 1,608 t=0 bridge cohorts at the decade ages `age0 + 10*k`,
+  `k = 0..9`, there is no `positive -> 0` boundary, and none on the
+  per-curve integer-age grid up to `max tabulated age + 100`; the fail-fast
+  cannot trigger on the current TSA29 instance.
+- **D5 grade clock.** Implemented as an explicit `grade_clock_period:
+  int | None` argument on the principal coefficient builders and on
+  `agent._annual_burned_price` / `agent._annual_burned_grade_mix`, threaded
+  through `build_principal_lp` / `solve_principal` and `build_agent_lp` /
+  `solve_agent`. `None` keeps the LP-year index, so RH passes nothing new and
+  is unchanged; the single-pass engine will pass `period_length`, giving
+  index `year % L`. Burned stock aged more than `L` years is therefore priced
+  at grade index `year mod L`; that wrap is intended (it mirrors the RH
+  window index) and is documented in the principal/agent module docstrings.
+- **D4/D6 burned continuity and reset (LP side only).** Agent: burned
+  inventory is continuous by default; `burned_stock_reset=True` zeroes the
+  carried `B[t-1]` coefficient in the first-year burned and salvage rows of
+  each decade. Principal: the predetermined burned path is seeded once at
+  t=0 by default; with the reset it is re-seeded from
+  `burned_volume_m3 * v_k / v_0` at each decade boundary and the
+  `annual_burn_loss` decay exponent restarts at `year % L`. The replay-side
+  semantics remain P8.4.
+- **Equivalence evidence.** `tests/test_phase8_growth_equivalence.py`
+  compares LP arrays and solutions for the RH-shaped usage (`horizon <= L`)
+  against the in-module static path and against the branch-base module
+  extracted from git (`53ba8d1`, content-identical to `09ed633`); the
+  cross-module tests skip in a shallow CI checkout.
 
 ## 4. Configuration surface (P8.4)
 
@@ -263,36 +326,38 @@ affected.
 
 ## 6. Open task specifications
 
-### P8.2: decadal growth-aware volume coefficients (#35)
+### P8.2: decadal growth-aware volume coefficients (#35) — implemented
+
+Decision notes in section 3.1 supersede the two spec bullets below where
+they differ (unclamped valuation age; absolute per-ha volumes).
 
 - Add a pure helper that returns, per cohort, a tuple of per-ha volumes for
-  decades `k = 0..ceil(horizon/L)-1` at age `min(age0 + L*k, cap)`. It
-  reuses `principal._curve_volume_m3_per_ha` / `agent._curve_volume_m3_per_ha`
-  and `rh.curve_age_caps`.
+  decades `k = 0..ceil(horizon/L)-1` at the UNCLAMPED age `age0 + L*k`
+  (`principal.decadal_per_ha_volumes`, same lookup as the boundary parsers;
+  no `rh.curve_age_caps` clamp for valuation).
 - Carry it on `PrincipalCohort` / `AgentCohort` as an optional
-  `decadal_volume_scale: tuple[float, ...] | None` (ratio
-  `v_k / v_0`, or absolute volumes). `None` means today's behaviour and is
-  the RH path.
+  `decadal_volume_scale: tuple[float, ...] | None` holding the absolute
+  per-ha volumes. `None` means today's behaviour and is the RH path.
 - Principal: green and burned volumes in year `y` scale by the decade-`k(y)`
   factor in `annual_offer`, `annual_burn_loss`, the AAC row, the ceiling
   row coefficient, and the burned-cap row. The fire/decay path in
-  `_annual_burned_volumes` must track **live area** and convert to volume
-  at the decade's per-ha volume, so that burn influx in decade `k` is
-  `R * live_area * v_k`.
+  `_annual_burned_volumes` tracks the live volume on the parsed t=0 basis
+  (live AREA when `v_0 = 0`) and scales each burn influx by the decade's
+  per-ha volume, so that burn influx in decade `k` is `R * live_area * v_k`.
 - Agent: the H/S/V/B variables stay as area fractions of the t=0 cohort.
   Margins in year `y` use `area * v_k(y)`. Burned inventory carried across
-  a decade boundary must be re-expressed in decade-`k+1` units. To do that,
-  multiply the `B[t-1]` coefficient in the first-year burned and salvage
-  rows of decade `k+1` by `v_k / v_{k+1}`, which keeps the model linear and
-  conserves burned volume. When horizon is at most `L`, no boundary exists,
-  so this reduces exactly. If `v_{k+1} == 0 < v_k`, the step fails fast
-  (open risk R5).
+  a decade boundary is re-expressed in decade-`k+1` units: the `B[t-1]`
+  coefficient in the first-year burned and salvage rows of decade `k+1` is
+  multiplied by `v_k / v_{k+1}`, which keeps the model linear and conserves
+  burned volume. When horizon is at most `L`, no boundary exists, so this
+  reduces exactly. If `v_{k+1} == 0 < v_k`, the build fails fast
+  (`agent_degenerate_growth_ratio`, section 3.1).
 - Acceptance: an equivalence test shows the LP built for horizon at most
   `L` is identical (row bounds, matrix, costs, offset) with and without the
-  growth argument, plus unit tests of the helper (clamping, interpolation)
-  and a 2-decade analytic test.
+  growth argument, plus unit tests of the helper (interpolation, constant
+  extension, unclamped age) and a 2-decade analytic test.
 
-### P8.3: grade clock and burned-stock semantics (#36)
+### P8.3: grade clock and burned-stock semantics (#36) — implemented
 
 - Add a `grade_clock_period: int | None` argument (None = LP year index,
   the RH default) to the principal coefficient builders and to
@@ -442,21 +507,21 @@ state.
 - **R2: Python row loops.** At `T=100` the principal adds about 160k
   `cum_offer` rows plus about 160k ceiling rows, and the agent adds about
   480k rows, all through `addRow` one at a time. P8.5 must measure this.
-- **R3: growth clamp versus WS3 yield.** D2 clamps to the curve age cap,
-  while WS3 values period `p` at the unclamped age `age0 + L*(p-1)` from
-  the `.yld` curves. For ages in `(cap, max tabulated age]`, the principal
-  green coefficient and the WS3 ceiling therefore use slightly different
-  per-ha volumes. This is harmless for feasibility, but it is a known
-  asymmetry.
+- **R3: growth clamp versus WS3 yield.** RESOLVED by the section 3.1
+  decision: valuation now uses the unclamped age `age0 + L*k` with the
+  boundary-parser lookup, exactly as WS3 values period `p`. The original
+  concern (cap-clamped coefficients versus unclamped WS3 ceilings) no
+  longer applies.
 - **R4: zero WS3 ceiling blocks salvage too.** A single offer variable
   scales both green and burned volume. A cohort that WS3 does not schedule
   in a decade gets a 0 ceiling and so cannot be offered at all, salvage
   included (`principal.py:330-341`). This holds in RH today, and single pass
   inherits it per decade. It is noted here because it shapes where salvage
   can happen in both modes.
-- **R5: degenerate growth ratio.** `v_{k+1} = 0 < v_k` breaks the burned
-  re-expression in P8.2. It does not occur on monotone curves; the fix is to
-  fail fast.
+- **R5: degenerate growth ratio.** IMPLEMENTED as the structured fail-fast
+  `agent_degenerate_growth_ratio` (section 3.1). The real TSA29 curves and
+  t=0 bridge cohorts show no `v_{k+1} = 0 < v_k` boundary within 100 years,
+  so it cannot trigger on the current instance.
 - **R6: regen age convention.** RH regenerates at age 5 (the midpoint
   lattice), but WS3 itself places regenerated area at age 0 (and `L` one
   period later). Single pass mirrors RH in the replay. The WS3 t=0 solve

@@ -5,6 +5,45 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 8 P8.2/P8.3 (issues #35, #36): decadal growth-aware volume
+  coefficients, the grade clock, and burned-stock continuity/reset
+  semantics.
+  - `principal.decadal_per_ha_volumes` returns each t=0 cohort's per-ha
+    volume at the UNCLAMPED decadal ages `age0 + L*k`, with the exact
+    boundary-parser lookup (constant extension beyond the tabulated
+    maximum). That is the WS3 period valuation convention, so the LP
+    coefficients stay consistent with the WS3 per-period ceilings
+    (supervisor decision; planning risk R3 resolved; `rh.curve_age_caps`
+    still governs RH state aging, unchanged).
+  - `PrincipalCohort`/`AgentCohort` gained the optional
+    `decadal_volume_scale`, holding those absolute per-ha volumes (m3/ha).
+    The principal LP scales green and burned volumes in `annual_offer`,
+    `annual_burn_loss`, the AAC row, the burned-cap row, and the
+    ceiling-row coefficient, and its predetermined fire/decay path tracks
+    live volume on the parsed t=0 basis (live AREA when `v_0 = 0`) so burn
+    influx in decade `k` is `R * live_area * v_k`. The agent keeps H/S/V/B
+    as t=0 area fractions, scales margins by `area_ha * v_k(y)`, and
+    re-expresses carried burned inventory at decade boundaries by
+    `v_k / v_{k+1}` (linear, volume-conserving). `v_{k+1} = 0 < v_k` fails
+    fast (`agent_degenerate_growth_ratio`); on the 108 TSA29 yield curves
+    and all 1,608 t=0 bridge cohorts no such boundary occurs within 100
+    years.
+  - `grade_clock_period: int | None` indexes the annual burned-grade mix
+    at `year % period` (D5) in both LPs, threaded through the builders and
+    solvers; `None` keeps the LP-year index. Burned stock aged more than one
+    period is priced at index `year mod period`, which mirrors the RH window
+    and is intended.
+  - `burned_stock_reset: bool = False` re-seeds the principal burned path
+    from `burned_volume_m3 * v_k / v_0` and restarts the `annual_burn_loss`
+    decay exponent at every decade start (D6), and zeroes the agent's
+    carried `B[t-1]` coefficient in the first-year burned and salvage rows
+    of each decade (D4).
+  - RH passes nothing new, so the rolling-horizon LPs are bit-identical:
+    `tests/test_phase8_growth_equivalence.py` checks LP arrays and
+    solutions for the RH-shaped usage (horizon at most one `period_length`)
+    in-module and against the branch-base module extracted from git
+    (`53ba8d1`, content-identical to `09ed633`; the cross-module tests skip
+    in a shallow CI checkout).
 - Phase 8 P8.1 (issue #34): added year-indexed WS3 ceilings for multi-period
   plans.
   - `rh.schedule_cohort_period_volumes` maps the `cc` volume of every
