@@ -85,6 +85,31 @@ Documented deviations from the prototype
 
 The model is a pure LP: no integer variables, no binaries, no thresholding or
 rounding of decision outputs, and zero offer rows are emitted explicitly.
+
+Phase 8 extensions (single-pass planning)
+-----------------------------------------
+Three optional inputs change coefficients and accounting without adding
+decision variables:
+
+- ``PrincipalCohort.decadal_volume_scale`` carries absolute per-ha volumes
+  (m3/ha) at the unclamped decadal ages ``age0 + L*k`` (constant extension
+  beyond the last tabulated curve age, the WS3 valuation convention). Year
+  ``y``'s green volume is ``area_ha * v_k(y)``; the predetermined fire/decay
+  path tracks live volume on the parsed t=0 basis and scales every burn
+  influx by ``v_k / v_0`` (live AREA when ``v_0 = 0``), so burn influx in
+  decade ``k`` is ``R * live_area * v_k``. ``None`` is the rolling-horizon
+  path: every year is valued at the static t=0 volume.
+- ``grade_clock_period`` (``None`` = LP-year index) prices the annual grade
+  mix at ``year % period`` (D5). Burned stock aged more than one period is
+  priced at index ``year mod period``, which mirrors the rolling-horizon
+  window indexing.
+- ``burned_stock_reset`` re-seeds the predetermined burned path from
+  ``burned_volume_m3 * v_k / v_0`` at each decade boundary and restarts the
+  ``annual_burn_loss`` decay exponent at ``year % L`` (D6), mimicking the
+  rolling-horizon boundary reset (``rh.py`` "Burned-stock boundary").
+
+With the defaults, or with a horizon of at most one decade, all three
+reduce bit-exactly to the rolling-horizon coefficients (equivalence tests).
 """
 
 from __future__ import annotations
@@ -148,6 +173,12 @@ class PrincipalCohort:
     All volumes are m3; ``cashflow`` and ``burned_value`` are the totals when
     the whole cohort is offered once. ``burn_rate`` is the annual burn
     probability ``1 / MFRI`` of the cohort's BEC zone.
+
+    ``decadal_volume_scale`` (optional, the single-pass growth surface) holds
+    one absolute per-ha volume (m3/ha) per decade ``k`` at the unclamped age
+    ``age0 + period_length*k`` (see :func:`decadal_per_ha_volumes`). ``None``
+    values the cohort at its static t=0 volume every year, which is the
+    rolling-horizon path.
     """
 
     cohort_id: str
@@ -164,6 +195,7 @@ class PrincipalCohort:
     green_stumpage_rate: float | None = None
     burned_stumpage_rate: float | None = None
     subsidy_rate_per_m3: float | None = None
+    decadal_volume_scale: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +237,47 @@ def load_cohorts(config: PrincipalRunConfig) -> list[PrincipalCohort]:
     )
 
 
+def decadal_per_ha_volumes(
+    curves: dict[int, tuple[np.ndarray, np.ndarray]],
+    cohort_curve_ages: Sequence[tuple[int, int]],
+    *,
+    horizon: int,
+    period_length: int,
+) -> list[tuple[float, ...]]:
+    """Return each cohort's per-ha volume at every decadal age (m3/ha).
+
+    Decade ``k`` (0-based) is valued at the UNCLAMPED age
+    ``age0 + period_length*k`` with the exact boundary-parser lookup: linear
+    interpolation inside the tabulated age range and constant extension
+    beyond it. This is also the WS3 period valuation convention (WS3 ages a
+    stand by ``+period_length`` per period without clamping), so the
+    returned volumes stay consistent with the per-period WS3 ceilings that
+    bound the same LP years. Each returned tuple holds
+    ``ceil(horizon / period_length)`` entries, ready to become a cohort's
+    ``decadal_volume_scale``.
+    """
+
+    if horizon <= 0:
+        raise PrincipalError(
+            "principal_invalid_horizon", f"horizon must be positive, got {horizon}"
+        )
+    if period_length <= 0:
+        raise PrincipalError(
+            "principal_invalid_period_length",
+            f"period_length must be positive, got {period_length}",
+        )
+    decade_count = math.ceil(horizon / period_length)
+    return [
+        tuple(
+            _curve_volume_m3_per_ha(
+                curves, int(curve_id), int(age0) + period_length * decade
+            )
+            for decade in range(decade_count)
+        )
+        for curve_id, age0 in cohort_curve_ages
+    ]
+
+
 def build_principal_lp(
     cohorts: list[PrincipalCohort],
     *,
@@ -213,6 +286,9 @@ def build_principal_lp(
     decay_rate: float = DEFAULT_DECAY_RATE,
     burned_limit_annual_m3: float | None = None,
     cohort_ceilings_m3: CohortCeilings | None = None,
+    period_length: int | None = None,
+    grade_clock_period: int | None = None,
+    burned_stock_reset: bool = False,
 ) -> PrincipalLP:
     """Build the continuous principal offer LP as a HiGHS model.
 
@@ -226,9 +302,18 @@ def build_principal_lp(
     uniformly over the implemented years — or a sequence of exactly
     ``horizon`` per-year ceilings (the single-pass engine passes one WS3
     period volume per decade, split per year). Each cohort adds ``horizon``
-    rows ``green_volume_m3[c] * offer[c,y] <= ceiling[c,y]`` that augment
+    rows ``green_volume_m3[c,y] * offer[c,y] <= ceiling[c,y]`` that augment
     (never replace) the global AAC row; a scalar and its broadcast sequence
     build the identical LP.
+
+    ``period_length`` is the single-pass decade length (the WS3
+    ``period_length``); it is required by a cohort's decadal growth surface
+    and by ``burned_stock_reset`` and ignored otherwise. ``grade_clock_period``
+    prices the annual grade mix at ``year % period`` (D5; ``None`` keeps the
+    LP-year index, the rolling-horizon default). ``burned_stock_reset``
+    re-seeds the predetermined burned path at every decade boundary (D6).
+    With the defaults, or with a horizon of at most one decade, the LP is
+    bit-identical to the rolling-horizon LP (equivalence tests).
     """
 
     if not cohorts:
@@ -250,6 +335,21 @@ def build_principal_lp(
             "principal_invalid_burned_limit",
             f"burned_limit_annual_m3 cannot be negative: {burned_limit_annual_m3}",
         )
+    if period_length is not None and period_length <= 0:
+        raise PrincipalError(
+            "principal_invalid_period_length",
+            f"period_length must be positive, got {period_length}",
+        )
+    if grade_clock_period is not None and grade_clock_period <= 0:
+        raise PrincipalError(
+            "principal_invalid_grade_clock",
+            f"grade_clock_period must be positive, got {grade_clock_period}",
+        )
+    if burned_stock_reset and period_length is None:
+        raise PrincipalError(
+            "principal_invalid_burned_stock_reset",
+            "burned_stock_reset requires period_length",
+        )
     ceiling_matrix = (
         None
         if cohort_ceilings_m3 is None
@@ -260,6 +360,11 @@ def build_principal_lp(
     years = range(horizon)
     offer_count = cohort_count * horizon
     total_columns = 2 * offer_count
+    year_volumes = [
+        _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
+    ]
+    green_by_year = np.array([green for green, _burned in year_volumes])
+    burned_by_year = np.array([burned for _green, burned in year_volumes])
 
     model = highspy.Highs()
     model.setOptionValue("output_flag", False)
@@ -275,7 +380,14 @@ def build_principal_lp(
     offset = 0.0
     for c_index, cohort in enumerate(cohorts):
         base = c_index * horizon
-        coefficients = _principal_offer_coefficients(cohort, horizon, decay_rate)
+        coefficients = _principal_offer_coefficients(
+            cohort,
+            horizon,
+            decay_rate,
+            period_length=period_length,
+            grade_clock_period=grade_clock_period,
+            burned_stock_reset=burned_stock_reset,
+        )
         costs[base : base + horizon] = coefficients.annual_offer
         for year, loss in enumerate(coefficients.annual_burn_loss):
             costs[offer_count + base + year] = loss
@@ -304,12 +416,10 @@ def build_principal_lp(
             -highspy.kHighsInf, 1.0, horizon, indices, np.ones(horizon)
         )
 
-    # aac[y]: sum_c green_volume_m3[c] * offer[c,y] <= aac_annual_m3
+    # aac[y]: sum_c green_volume_m3[c,y] * offer[c,y] <= aac_annual_m3
     offer_columns = tuple(
         (c_index, year) for c_index in range(cohort_count) for year in years
     )
-    green_volumes = np.array([cohort.green_volume_m3 for cohort in cohorts])
-    burned_volumes = np.array([cohort.burned_volume_m3 for cohort in cohorts])
     column_grid = np.arange(offer_count, dtype=np.int32).reshape(cohort_count, horizon)
     for year in years:
         model.addRow(
@@ -317,7 +427,7 @@ def build_principal_lp(
             aac_annual_m3,
             cohort_count,
             column_grid[:, year],
-            green_volumes,
+            green_by_year[:, year],
         )
         if burned_limit_annual_m3 is None:
             continue
@@ -326,20 +436,19 @@ def build_principal_lp(
             burned_limit_annual_m3,
             cohort_count,
             column_grid[:, year],
-            burned_volumes,
+            burned_by_year[:, year],
         )
 
-    # ws3_ceiling[c,y]: green_volume_m3[c] * offer[c,y] <= ceiling_matrix[c,y]
+    # ws3_ceiling[c,y]: green_volume_m3[c,y] * offer[c,y] <= ceiling_matrix[c,y]
     if ceiling_matrix is not None:
         for c_index, cohort_year_ceilings in enumerate(ceiling_matrix):
-            coefficient = np.array([green_volumes[c_index]])
             for year in years:
                 model.addRow(
                     -highspy.kHighsInf,
                     float(cohort_year_ceilings[year]),
                     1,
                     np.array([column_grid[c_index, year]], dtype=np.int32),
-                    coefficient,
+                    np.array([green_by_year[c_index, year]]),
                 )
 
     return PrincipalLP(model=model, offer_columns=offer_columns, horizon=horizon)
@@ -353,12 +462,18 @@ def solve_principal(
     decay_rate: float = DEFAULT_DECAY_RATE,
     burned_limit_annual_m3: float | None = None,
     cohort_ceilings_m3: CohortCeilings | None = None,
+    period_length: int | None = None,
+    grade_clock_period: int | None = None,
+    burned_stock_reset: bool = False,
     run_id: str = "principal-solve",
 ) -> PrincipalResult:
     """Build and solve the principal LP; return the typed result.
 
     Raises ``PrincipalError`` when the solve does not reach optimal status.
     Offer rows are emitted for every (cohort, year) pair, zeros included.
+    ``period_length``/``grade_clock_period``/``burned_stock_reset`` are the
+    Phase 8 single-pass switches of :func:`build_principal_lp`; with the
+    defaults the reported per-year volumes are the static t=0 volumes.
     """
 
     built = build_principal_lp(
@@ -368,6 +483,9 @@ def solve_principal(
         decay_rate=decay_rate,
         burned_limit_annual_m3=burned_limit_annual_m3,
         cohort_ceilings_m3=cohort_ceilings_m3,
+        period_length=period_length,
+        grade_clock_period=grade_clock_period,
+        burned_stock_reset=burned_stock_reset,
     )
     solve_started = time.monotonic()
     built.model.run()
@@ -383,6 +501,9 @@ def solve_principal(
     solution = built.model.getSolution().col_value
     objective_value = float(built.model.getInfo().objective_function_value)
 
+    year_volumes = [
+        _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
+    ]
     offers: list[PrincipalOfferRecord] = []
     green_offered = np.zeros(horizon)
     burned_offered = np.zeros(horizon)
@@ -392,8 +513,9 @@ def solve_principal(
         if fraction > OFFER_REPORTING_TOLERANCE:
             offered_cohort_years += 1
         cohort = cohorts[c_index]
-        green_offered[year] += fraction * cohort.green_volume_m3
-        burned_offered[year] += fraction * cohort.burned_volume_m3
+        green_year, burned_year = year_volumes[c_index]
+        green_offered[year] += fraction * float(green_year[year])
+        burned_offered[year] += fraction * float(burned_year[year])
         offers.append(
             PrincipalOfferRecord(
                 cohort_id=cohort.cohort_id,
@@ -538,7 +660,13 @@ def _parse_offer_fraction(value: float, column: int) -> float:
 
 
 def _expected_burn_losses(
-    cohort: PrincipalCohort, horizon: int, decay_rate: float
+    cohort: PrincipalCohort,
+    horizon: int,
+    decay_rate: float,
+    *,
+    period_length: int | None = None,
+    grade_clock_period: int | None = None,
+    burned_stock_reset: bool = False,
 ) -> list[tuple[int, float]]:
     """Return ``(year_index, expected_loss)`` pairs for one cohort.
 
@@ -549,12 +677,25 @@ def _expected_burn_losses(
 
     if cohort.burn_rate == 0.0 or cohort.burned_value == 0.0:
         return []
-    coefficients = _principal_offer_coefficients(cohort, horizon, decay_rate)
+    coefficients = _principal_offer_coefficients(
+        cohort,
+        horizon,
+        decay_rate,
+        period_length=period_length,
+        grade_clock_period=grade_clock_period,
+        burned_stock_reset=burned_stock_reset,
+    )
     return list(enumerate(coefficients.annual_burn_loss))
 
 
 def _principal_offer_coefficients(
-    cohort: PrincipalCohort, horizon: int, decay_rate: float
+    cohort: PrincipalCohort,
+    horizon: int,
+    decay_rate: float,
+    *,
+    period_length: int | None = None,
+    grade_clock_period: int | None = None,
+    burned_stock_reset: bool = False,
 ) -> PrincipalOfferCoefficients:
     """Precompute deterministic fire/decay coefficients for offer years.
 
@@ -562,6 +703,13 @@ def _principal_offer_coefficients(
     resulting state at that year supplies the direct offer coefficient and the
     annual burned-value coefficient. This is a marginal, predetermined path;
     it does not add fire or inventory state variables to the principal LP.
+
+    Under ``decadal_volume_scale`` the path values every decade at its per-ha
+    volume, so burn influx in decade ``k`` is ``R * live_area * v_k``.
+    ``grade_clock_period`` prices the annual grade
+    mix at ``year % period`` (D5); ``burned_stock_reset`` re-seeds the burned
+    inventory from ``burned_volume_m3 * v_k / v_0`` and restarts the
+    ``annual_burn_loss`` decay exponent at every decade boundary (D6).
     """
 
     if horizon <= 0:
@@ -572,6 +720,21 @@ def _principal_offer_coefficients(
         raise PrincipalError(
             "principal_invalid_decay", f"decay_rate must lie in [0, 1]: {decay_rate}"
         )
+    if grade_clock_period is not None and grade_clock_period <= 0:
+        raise PrincipalError(
+            "principal_invalid_grade_clock",
+            f"grade_clock_period must be positive, got {grade_clock_period}",
+        )
+    if burned_stock_reset and period_length is None:
+        raise PrincipalError(
+            "principal_invalid_burned_stock_reset",
+            "burned_stock_reset requires period_length",
+        )
+
+    green_by_year, static_burned_by_year = _cohort_year_volumes(
+        cohort, horizon, period_length
+    )
+    exponents = _decay_exponents(horizon, period_length, burned_stock_reset)
 
     configured_economics = (
         cohort.green_stumpage_rate,
@@ -579,40 +742,55 @@ def _principal_offer_coefficients(
         cohort.subsidy_rate_per_m3,
     )
     if any(value is None for value in configured_economics):
-        burned_values = _annual_burned_values(cohort, horizon)
+        burned_values = _annual_burned_values(
+            cohort,
+            horizon,
+            burned_volumes=tuple(static_burned_by_year),
+            grade_clock_period=grade_clock_period,
+        )
         losses = tuple(
-            cohort.burn_rate * value * (1.0 - decay_rate**year)
-            for year, value in enumerate(burned_values)
+            cohort.burn_rate * value * (1.0 - decay_rate**exponent)
+            for value, exponent in zip(burned_values, exponents, strict=True)
         )
         return PrincipalOfferCoefficients(
-            annual_burned_volume_m3=(cohort.burned_volume_m3,) * horizon,
+            annual_burned_volume_m3=tuple(static_burned_by_year),
             annual_burned_price_m3=tuple(
-                value / cohort.burned_volume_m3
-                if cohort.burned_volume_m3 > 0.0
-                else 0.0
-                for value in burned_values
+                value / volume if volume > 0.0 else 0.0
+                for value, volume in zip(
+                    burned_values, static_burned_by_year, strict=True
+                )
             ),
-            annual_offer=(cohort.cashflow,) * horizon,
+            annual_offer=tuple(
+                cohort.cashflow * factor
+                for factor in _relative_green_volumes(cohort, green_by_year)
+            ),
             annual_burn_loss=losses,
         )
 
-    annual_burned_volume = _annual_burned_volumes(cohort, horizon, decay_rate)
+    annual_burned_volume = _annual_burned_volumes(
+        cohort,
+        horizon,
+        decay_rate,
+        period_length=period_length,
+        burned_stock_reset=burned_stock_reset,
+    )
     annual_burned_values = _annual_burned_values(
-        cohort, horizon, annual_burned_volume
+        cohort, horizon, annual_burned_volume, grade_clock_period=grade_clock_period
     )
     annual_burned_prices = tuple(
         value / volume if volume > 0.0 else 0.0
         for value, volume in zip(annual_burned_values, annual_burned_volume, strict=True)
     )
     annual_offer = tuple(
-        cohort.green_volume_m3 * (1.0 - cohort.burn_rate) ** year
-        * cohort.green_stumpage_rate
+        green_year * (1.0 - cohort.burn_rate) ** year * cohort.green_stumpage_rate
         + volume * (cohort.burned_stumpage_rate - cohort.subsidy_rate_per_m3)
-        for year, volume in enumerate(annual_burned_volume)
+        for year, (green_year, volume) in enumerate(
+            zip(green_by_year, annual_burned_volume, strict=True)
+        )
     )
     annual_burn_loss = tuple(
-        cohort.burn_rate * value * (1.0 - decay_rate**year)
-        for year, value in enumerate(annual_burned_values)
+        cohort.burn_rate * value * (1.0 - decay_rate**exponent)
+        for value, exponent in zip(annual_burned_values, exponents, strict=True)
     )
     return PrincipalOfferCoefficients(
         annual_burned_volume_m3=tuple(annual_burned_volume),
@@ -622,28 +800,210 @@ def _principal_offer_coefficients(
     )
 
 
-def _annual_burned_volumes(
-    cohort: PrincipalCohort, horizon: int, decay_rate: float
-) -> list[float]:
-    """Return burned inventory available at each possible offer year."""
+def _decadal_scale_array(
+    cohort: PrincipalCohort, horizon: int, period_length: int | None
+) -> np.ndarray | None:
+    """Return a cohort's trusted decadal per-ha volumes, or ``None``."""
 
-    live = float(cohort.green_volume_m3)
+    if cohort.decadal_volume_scale is None:
+        return None
+    if period_length is None:
+        raise PrincipalError(
+            "principal_invalid_decadal_volume_scale",
+            f"cohort {cohort.cohort_id!r} carries a decadal volume scale but "
+            "period_length is not set",
+        )
+    return _parse_decadal_volume_scale(
+        cohort.decadal_volume_scale, horizon, period_length
+    )
+
+
+def _parse_decadal_volume_scale(
+    scale: tuple[float, ...], horizon: int, period_length: int
+) -> np.ndarray:
+    """Parse a cohort's decadal per-ha volumes into a trusted array.
+
+    Boundary parser for the single-pass growth surface: exactly
+    ``ceil(horizon / period_length)`` entries, each finite and non-negative.
+    Raises ``PrincipalError`` on any violation; coefficient code then trusts
+    the returned array.
+    """
+
+    decade_count = math.ceil(horizon / period_length)
+    values = np.asarray(scale, dtype=float)
+    if values.ndim != 1 or len(values) != decade_count:
+        raise PrincipalError(
+            "principal_invalid_decadal_volume_scale",
+            f"decadal volume scale carries {values.size} entries for a horizon "
+            f"of {horizon} years and a period length of {period_length} "
+            f"(expected {decade_count})",
+        )
+    if not np.all(np.isfinite(values)):
+        raise PrincipalError(
+            "principal_invalid_decadal_volume_scale",
+            "decadal volume scale entries must be finite (m3/ha)",
+        )
+    if np.any(values < 0.0):
+        raise PrincipalError(
+            "principal_invalid_decadal_volume_scale",
+            "decadal volume scale entries cannot be negative (m3/ha)",
+        )
+    return values
+
+
+def _cohort_year_volumes(
+    cohort: PrincipalCohort, horizon: int, period_length: int | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Expand a cohort's growth surface to per-year green/burned volumes (m3).
+
+    Year 0 keeps the parsed t=0 volumes bit-exactly (the scale's first entry
+    is the same curve lookup), which is what makes a horizon of at most
+    ``period_length`` reduce to the rolling-horizon coefficients. Without a
+    ``decadal_volume_scale`` both series are constant, the RH path.
+    """
+
+    per_ha = _decadal_scale_array(cohort, horizon, period_length)
+    if per_ha is None:
+        return (
+            np.full(horizon, cohort.green_volume_m3),
+            np.full(horizon, cohort.burned_volume_m3),
+        )
+    decade = np.minimum(np.arange(horizon) // period_length, len(per_ha) - 1)
+    green = np.full(horizon, cohort.green_volume_m3)
+    after_first_decade = decade > 0
+    green[after_first_decade] = cohort.area_ha * per_ha[decade[after_first_decade]]
+    burned = (
+        cohort.burned_volume_m3 * green / cohort.green_volume_m3
+        if cohort.green_volume_m3 > 0.0
+        else np.zeros(horizon)
+    )
+    return green, burned
+
+
+def _relative_green_volumes(
+    cohort: PrincipalCohort, green_by_year: np.ndarray
+) -> tuple[float, ...]:
+    """Return each year's green volume relative to the t=0 standing volume."""
+
+    if cohort.green_volume_m3 <= 0.0:
+        return (0.0,) * len(green_by_year)
+    return tuple(float(volume) / cohort.green_volume_m3 for volume in green_by_year)
+
+
+def _decay_exponents(
+    horizon: int, period_length: int | None, burned_stock_reset: bool
+) -> tuple[int, ...]:
+    """Return the ``annual_burn_loss`` decay exponent of every offer year.
+
+    Both planning modes index the exponent by the LP year;
+    ``burned_stock_reset`` restarts it at every decade boundary (D6), which
+    only changes a multi-decade LP.
+    """
+
+    if not burned_stock_reset:
+        return tuple(range(horizon))
+    if period_length is None:
+        raise PrincipalError(
+            "principal_invalid_burned_stock_reset",
+            "burned_stock_reset requires period_length",
+        )
+    return tuple(year % period_length for year in range(horizon))
+
+
+def _annual_burned_volumes(
+    cohort: PrincipalCohort,
+    horizon: int,
+    decay_rate: float,
+    *,
+    period_length: int | None = None,
+    burned_stock_reset: bool = False,
+) -> list[float]:
+    """Return burned inventory available at each possible offer year (m3).
+
+    Without a ``decadal_volume_scale`` this is the static t=0 path (live
+    volume in m3). With one, the burn influx of decade ``k`` is
+    ``R * live_area * v_k``: the live basis stays on the parsed t=0 volume
+    (bit-exact reduction when the horizon is within one decade) and is
+    scaled by ``v_k / v_0``, or, when ``v_0 = 0``, it tracks live AREA and
+    is scaled by ``v_k`` directly. ``burned_stock_reset`` re-seeds the
+    inventory from ``burned_volume_m3 * v_k / v_0`` at every decade boundary.
+    """
+
+    if burned_stock_reset and period_length is None:
+        raise PrincipalError(
+            "principal_invalid_burned_stock_reset",
+            "burned_stock_reset requires period_length",
+        )
+    per_ha = _decadal_scale_array(cohort, horizon, period_length)
+    if per_ha is None:
+        live = float(cohort.green_volume_m3)
+        burned = float(cohort.burned_volume_m3)
+        volumes: list[float] = []
+        for year in range(horizon):
+            if burned_stock_reset and year > 0 and year % period_length == 0:
+                burned = _reseeded_burned_volume(cohort, per_ha, year, period_length)
+            volumes.append(burned)
+            influx = fire.burn_influx(live, cohort.burn_rate)
+            live = fire.live_volume_after(live, 0.0, influx)
+            burned = fire.burned_volume_after(burned, influx, 0.0, decay_rate)
+        return volumes
+
+    v0 = float(per_ha[0])
+    live_basis = float(cohort.green_volume_m3) if v0 > 0.0 else float(cohort.area_ha)
     burned = float(cohort.burned_volume_m3)
-    volumes: list[float] = []
-    for _ in range(horizon):
+    volumes = []
+    for year in range(horizon):
+        decade = min(year // period_length, len(per_ha) - 1)
+        if burned_stock_reset and year > 0 and year % period_length == 0:
+            burned = _reseeded_burned_volume(cohort, per_ha, year, period_length)
         volumes.append(burned)
-        influx = fire.burn_influx(live, cohort.burn_rate)
-        live = fire.live_volume_after(live, 0.0, influx)
+        influx_basis = fire.burn_influx(live_basis, cohort.burn_rate)
+        live_basis = fire.live_volume_after(live_basis, 0.0, influx_basis)
+        if decade == 0:
+            influx = influx_basis
+        elif v0 > 0.0:
+            influx = influx_basis * float(per_ha[decade]) / v0
+        else:
+            influx = influx_basis * float(per_ha[decade])
         burned = fire.burned_volume_after(burned, influx, 0.0, decay_rate)
     return volumes
+
+
+def _reseeded_burned_volume(
+    cohort: PrincipalCohort,
+    per_ha: np.ndarray | None,
+    year: int,
+    period_length: int,
+) -> float:
+    """Return the decade-boundary burned re-seed ``burned_volume_m3*v_k/v_0``.
+
+    Without a growth surface the seed is the static t=0 burned volume. A
+    zero t=0 per-ha volume carries no seed at all.
+    """
+
+    if per_ha is None:
+        return float(cohort.burned_volume_m3)
+    if per_ha[0] <= 0.0:
+        return 0.0
+    return (
+        float(cohort.burned_volume_m3)
+        * float(per_ha[year // period_length])
+        / float(per_ha[0])
+    )
 
 
 def _annual_burned_values(
     cohort: PrincipalCohort,
     horizon: int,
     burned_volumes: list[float] | tuple[float, ...] | None = None,
+    *,
+    grade_clock_period: int | None = None,
 ) -> list[float]:
-    """Return burned values under the predetermined annual grade mix."""
+    """Return burned values under the predetermined annual grade mix.
+
+    ``grade_clock_period`` indexes the predetermined mix at ``year % period``
+    instead of the LP year (D5); ``None`` keeps the rolling-horizon index.
+    """
 
     if cohort.burned_grade_mix is None or cohort.burned_grade_prices is None:
         return [cohort.burned_value] * horizon
@@ -653,12 +1013,37 @@ def _annual_burned_values(
         burned_volumes = [cohort.burned_volume_m3] * horizon
     initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
     prices = dict(zip(GRADE_ORDER, cohort.burned_grade_prices, strict=True))
+    indices = _grade_clock_indices(horizon, grade_clock_period)
+    mixes = annual_grade_mix(
+        initial_mix, _grade_mix_table_length(horizon, grade_clock_period)
+    )
     return [
-        volume * weighted_grade_price(mix, prices)
-        for volume, mix in zip(
-            burned_volumes, annual_grade_mix(initial_mix, horizon), strict=True
-        )
+        volume * weighted_grade_price(mixes[index], prices)
+        for volume, index in zip(burned_volumes, indices, strict=True)
     ]
+
+
+def _grade_clock_indices(
+    horizon: int, grade_clock_period: int | None
+) -> tuple[int, ...]:
+    """Return the grade-mix index of every LP year."""
+
+    if grade_clock_period is None:
+        return tuple(range(horizon))
+    if grade_clock_period <= 0:
+        raise PrincipalError(
+            "principal_invalid_grade_clock",
+            f"grade_clock_period must be positive, got {grade_clock_period}",
+        )
+    return tuple(year % grade_clock_period for year in range(horizon))
+
+
+def _grade_mix_table_length(horizon: int, grade_clock_period: int | None) -> int:
+    """Return how many annual mixes must be generated for the LP years."""
+
+    if grade_clock_period is None:
+        return horizon
+    return min(grade_clock_period, horizon)
 
 
 def _read_table(path: Path, code: str) -> pd.DataFrame:
@@ -943,6 +1328,7 @@ __all__ = [
     "PrincipalLP",
     "PrincipalOfferCoefficients",
     "build_principal_lp",
+    "decadal_per_ha_volumes",
     "load_cohorts",
     "run_principal",
     "solve_principal",

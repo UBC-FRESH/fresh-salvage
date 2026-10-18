@@ -8,6 +8,7 @@ constants (planning/economics-calibration.md): green margin = green_price -
 - 56 (harvest) - 38 (transport) - 0.25 (stumpage) + 3 (subsidy).
 """
 
+import dataclasses
 import hashlib
 
 import highspy
@@ -41,7 +42,18 @@ def _cohort(
     )
 
 
-def _solve(cohorts, *, horizon=3, decay_rate=0.85, discount_rate=0.03, offers=None, economics=None):
+def _solve(
+    cohorts,
+    *,
+    horizon=3,
+    decay_rate=0.85,
+    discount_rate=0.03,
+    offers=None,
+    economics=None,
+    period_length=None,
+    grade_clock_period=None,
+    burned_stock_reset=False,
+):
     if offers is None:
         offers = agent.resolve_offers(cohorts, horizon=horizon)
     return agent.solve_agent(
@@ -51,6 +63,9 @@ def _solve(cohorts, *, horizon=3, decay_rate=0.85, discount_rate=0.03, offers=No
         decay_rate=decay_rate,
         discount_rate=discount_rate,
         economics=economics,
+        period_length=period_length,
+        grade_clock_period=grade_clock_period,
+        burned_stock_reset=burned_stock_reset,
         run_id="toy",
     )
 
@@ -705,3 +720,196 @@ def test_run_agent_records_offers_checksum_when_offered(tmp_path) -> None:
         and decision.salvage_fraction <= 0.5 + TOLERANCE
         for decision in result.decisions
     )
+
+
+# --- decadal growth, grade clock, burned-stock reset (Phase 8 P8.2/P8.3) -----
+
+
+def _growth_cohort(
+    cohort_id: str,
+    *,
+    per_ha: tuple[float, ...] = (100.0, 200.0),
+    burn_rate: float = 0.5,
+    green_price_m3: float = 0.0,
+    burned_price_m3: float = 0.0,
+) -> AgentCohort:
+    """Cohort whose H/S/V/B fractions ride on a decadal growth surface."""
+
+    area_ha = 10.0
+    return AgentCohort(
+        cohort_id=cohort_id,
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=area_ha,
+        standing_volume_m3=area_ha * per_ha[0],
+        burn_rate=burn_rate,
+        green_price_m3=green_price_m3,
+        burned_price_m3=burned_price_m3,
+        decadal_volume_scale=per_ha,
+    )
+
+
+def _row_entries(built: agent.AgentLP, row: int) -> dict[int, float]:
+    """Return the nonzero ``{column: coefficient}`` entries of one LP row."""
+
+    lp = built.model.getLp()
+    start = lp.a_matrix_.start_[row]
+    end = lp.a_matrix_.start_[row + 1]
+    return {
+        int(column): float(value)
+        for column, value in zip(
+            lp.a_matrix_.index_[start:end], lp.a_matrix_.value_[start:end], strict=True
+        )
+    }
+
+
+def test_growth_scales_agent_margins_by_decade_volume() -> None:
+    cohort = AgentCohort(
+        cohort_id="margins",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=10.0,
+        standing_volume_m3=1000.0,
+        burn_rate=0.0,
+        green_price_m3=200.0,
+        burned_price_m3=130.0,
+        decadal_volume_scale=(100.0, 200.0),
+    )
+    offers = agent.resolve_offers([cohort], horizon=4)
+
+    built = agent.build_agent_lp([cohort], offers, horizon=4, period_length=2)
+    costs = list(built.model.getLp().col_cost_)
+
+    green_margin = 200.0 - 45.0 - 30.0 - 15.0
+    salvage_margin = 130.0 - 56.0 - 38.0 - 0.25 + 3.0
+    volumes = (1000.0, 1000.0, 2000.0, 2000.0)
+    assert costs[:4] == pytest.approx(
+        [volume * green_margin / 1.03 ** (year + 1) for year, volume in enumerate(volumes)]
+    )
+    assert costs[4:8] == pytest.approx(
+        [
+            volume * salvage_margin / 1.03 ** (year + 1)
+            for year, volume in enumerate(volumes)
+        ]
+    )
+
+
+def test_growth_reports_carried_burned_inventory_in_decade_units() -> None:
+    result = _solve([_growth_cohort("carry")], horizon=4, period_length=2)
+
+    # B area fractions 0.425 -> 0.57375; decade 2 opens at ratio
+    # v_0 / v_1 = 1/2, so B = 0.85 * (0.5 * 0.57375 + 0.125) = 0.35009375,
+    # then 0.85 * (0.35009375 + 0.0625). Reported in m3 at each decade's
+    # per-ha volume (x 1000, then x 2000).
+    burned = [volumes.burned_volume_m3 for volumes in result.per_year_volumes]
+    live = [volumes.live_volume_m3 for volumes in result.per_year_volumes]
+    influx = [volumes.burn_influx_m3 for volumes in result.per_year_volumes]
+
+    assert burned == pytest.approx([425.0, 573.75, 700.1875, 701.409375])
+    assert live == pytest.approx([500.0, 250.0, 250.0, 125.0])
+    assert influx == pytest.approx([500.0, 250.0, 250.0, 125.0])
+    assert result.objective_value == pytest.approx(0.0)
+
+
+def test_burned_stock_reset_drops_the_boundary_inventory() -> None:
+    result = _solve(
+        [_growth_cohort("reset")], horizon=4, period_length=2, burned_stock_reset=True
+    )
+
+    # Decade 2 restarts from that year's influx only: B = 0.85 * 0.125.
+    burned = [volumes.burned_volume_m3 for volumes in result.per_year_volumes]
+    assert burned == pytest.approx([425.0, 573.75, 212.5, 286.875])
+
+
+def test_boundary_rows_rescale_the_previous_burned_column() -> None:
+    cohorts = [_growth_cohort("rows")]
+    offers = agent.resolve_offers(cohorts, horizon=4)
+
+    built = agent.build_agent_lp(cohorts, offers, horizon=4, period_length=2)
+
+    # Cohort 0 blocks: H 0-3, S 4-7, V 8-11, B 12-15; year t rows start at
+    # 3*t. Year 1 is inside decade 0 (ratio 1); year 2 opens decade 1 with
+    # ratio v_0 / v_1 = 1/2.
+    year_1_burned = _row_entries(built, 4)
+    year_2_burned = _row_entries(built, 7)
+    year_2_salvage = _row_entries(built, 8)
+
+    assert year_1_burned[12] == pytest.approx(-0.85)
+    assert year_2_burned[13] == pytest.approx(-0.85 * 0.5)
+    assert year_2_burned[14] == pytest.approx(1.0)
+    assert year_2_salvage[13] == pytest.approx(-0.5)
+
+
+def test_degenerate_growth_ratio_fails_fast() -> None:
+    dying = _growth_cohort("dying", per_ha=(100.0, 0.0))
+    offers = agent.resolve_offers([dying], horizon=4)
+
+    with pytest.raises(agent.AgentError) as excinfo:
+        agent.build_agent_lp([dying], offers, horizon=4, period_length=2)
+    assert excinfo.value.code == "agent_degenerate_growth_ratio"
+
+    # A zero decade before a positive one is representable (ratio 0): the
+    # cohort simply starts generating volume in the second decade.
+    rising = _growth_cohort("rising", per_ha=(0.0, 100.0))
+    built = agent.build_agent_lp(
+        [rising],
+        agent.resolve_offers([rising], horizon=4),
+        horizon=4,
+        period_length=2,
+    )
+    assert built.model.getNumRow() == 4 * 3 + 1
+
+
+def test_grade_clock_prices_the_mix_at_year_modulo_period() -> None:
+    cohort = AgentCohort(
+        cohort_id="clock",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        standing_volume_m3=100.0,
+        burn_rate=0.0,
+        green_price_m3=200.0,
+        burned_price_m3=76.0,
+        burned_grade_mix=(0.2, 0.6, 0.2, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+    )
+
+    clocked = [
+        agent._annual_burned_price(cohort, year, grade_clock_period=2)
+        for year in range(4)
+    ]
+    unclocked = [agent._annual_burned_price(cohort, year) for year in range(4)]
+
+    assert clocked[0] == pytest.approx(unclocked[0])
+    assert clocked[1] == pytest.approx(unclocked[1])
+    assert clocked[2] == pytest.approx(unclocked[0])
+    assert clocked[3] == pytest.approx(unclocked[1])
+    assert abs(unclocked[2] - unclocked[0]) > 1.0  # the clock really wraps
+    assert agent._annual_burned_grade_mix(
+        cohort, 3, grade_clock_period=2
+    ) == agent._annual_burned_grade_mix(cohort, 1, grade_clock_period=2)
+
+
+def test_growth_parameter_validation_fails_fast() -> None:
+    cohort = _growth_cohort("validation")
+    offers = agent.resolve_offers([cohort], horizon=4)
+
+    with pytest.raises(agent.AgentError) as excinfo:
+        agent.build_agent_lp([cohort], offers, horizon=4)
+    assert excinfo.value.code == "agent_invalid_decadal_volume_scale"
+
+    for scale in [(100.0,), (100.0, -1.0), (100.0, float("nan"))]:
+        malformed = dataclasses.replace(cohort, decadal_volume_scale=scale)
+        with pytest.raises(agent.AgentError) as excinfo:
+            agent.build_agent_lp([malformed], offers, horizon=4, period_length=2)
+        assert excinfo.value.code == "agent_invalid_decadal_volume_scale"
+
+    with pytest.raises(agent.AgentError) as excinfo:
+        agent.build_agent_lp([cohort], offers, horizon=4, period_length=0)
+    assert excinfo.value.code == "agent_invalid_period_length"
+    with pytest.raises(agent.AgentError) as excinfo:
+        agent.build_agent_lp([cohort], offers, horizon=4, grade_clock_period=0)
+    assert excinfo.value.code == "agent_invalid_grade_clock"
+    with pytest.raises(agent.AgentError) as excinfo:
+        agent.build_agent_lp([cohort], offers, horizon=4, burned_stock_reset=True)
+    assert excinfo.value.code == "agent_invalid_burned_stock_reset"

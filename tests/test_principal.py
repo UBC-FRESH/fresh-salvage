@@ -5,9 +5,11 @@ TSA data is read. ``_solve`` wraps ``solve_principal`` with a high AAC and no
 burned cap unless the test says otherwise.
 """
 
+import dataclasses
 import hashlib
 
 import highspy
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -633,3 +635,268 @@ def test_malformed_per_year_ceilings_fail_fast(ceilings) -> None:
         principal.build_principal_lp(cohorts, horizon=3, cohort_ceilings_m3=ceilings)
 
     assert excinfo.value.code == "principal_invalid_cohort_ceilings"
+
+
+# --- decadal growth, grade clock, burned-stock reset (Phase 8 P8.2/P8.3) -----
+
+
+def _growth_cohort(
+    cohort_id: str,
+    *,
+    per_ha: tuple[float, ...] = (100.0, 200.0),
+    burn_rate: float = 0.1,
+    burned_fraction: float = 0.1,
+) -> PrincipalCohort:
+    """Cohort with the full economic surface and a decadal growth surface."""
+
+    area_ha = 10.0
+    green_volume_m3 = area_ha * per_ha[0]
+    burned_volume_m3 = burned_fraction * green_volume_m3
+    return PrincipalCohort(
+        cohort_id=cohort_id,
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=area_ha,
+        green_volume_m3=green_volume_m3,
+        burned_volume_m3=burned_volume_m3,
+        cashflow=4.0 * green_volume_m3,
+        # The "Other" grade never transitions, so the burned value stays a
+        # clean 20 $/m3 every year: expected losses read directly off the
+        # simulated burned volumes.
+        burned_value=20.0 * burned_volume_m3,
+        burn_rate=burn_rate,
+        burned_grade_mix=(0.0, 0.0, 0.0, 1.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+        green_stumpage_rate=15.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+        decadal_volume_scale=per_ha,
+    )
+
+
+def _row_entries(built: principal.PrincipalLP, row: int) -> dict[int, float]:
+    """Return the nonzero ``{column: coefficient}`` entries of one LP row."""
+
+    lp = built.model.getLp()
+    start = lp.a_matrix_.start_[row]
+    end = lp.a_matrix_.start_[row + 1]
+    return {
+        int(column): float(value)
+        for column, value in zip(
+            lp.a_matrix_.index_[start:end], lp.a_matrix_.value_[start:end], strict=True
+        )
+    }
+
+
+def test_decadal_per_ha_volumes_interpolate_and_extend_unclamped() -> None:
+    # The curve peaks at age 50 and declines afterwards; evaluating at
+    # unclamped ages beyond the tabulated maximum 100 extends the last value
+    # (90.0) instead of clamping to the RH curve age cap 95 (91.0).
+    curves = {7: (np.array([0.0, 50.0, 100.0]), np.array([0.0, 100.0, 90.0]))}
+
+    volumes = principal.decadal_per_ha_volumes(
+        curves, [(7, 85)], horizon=30, period_length=10
+    )
+
+    assert len(volumes) == 1
+    assert list(volumes[0]) == pytest.approx([93.0, 91.0, 90.0])
+
+
+def test_decadal_per_ha_volumes_cover_every_decade_and_fail_fast() -> None:
+    curves = {7: (np.array([0.0, 50.0]), np.array([0.0, 100.0]))}
+
+    volumes = principal.decadal_per_ha_volumes(
+        curves, [(7, 5)], horizon=25, period_length=10
+    )
+
+    assert len(volumes[0]) == 3  # ceil(25 / 10)
+
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal.decadal_per_ha_volumes(
+            curves, [(99, 5)], horizon=10, period_length=10
+        )
+    assert excinfo.value.code == "principal_yield_curve_missing"
+    with pytest.raises(principal.PrincipalError, match="horizon"):
+        principal.decadal_per_ha_volumes(curves, [(7, 5)], horizon=0, period_length=10)
+    with pytest.raises(principal.PrincipalError, match="period_length"):
+        principal.decadal_per_ha_volumes(curves, [(7, 5)], horizon=10, period_length=0)
+
+
+def test_growth_scales_principal_annual_coefficients() -> None:
+    cohort = _growth_cohort("growth")
+
+    coefficients = principal._principal_offer_coefficients(
+        cohort, 4, 0.85, period_length=2
+    )
+
+    # Decades are years 0-1 (v = 100 m3/ha) and 2-3 (v = 200 m3/ha). Burn
+    # influx in decade k is R * live_area * v_k; burned stock carried across
+    # the boundary stays in m3.
+    assert coefficients.annual_burned_volume_m3 == pytest.approx(
+        (100.0, 170.0, 221.0, 325.55)
+    )
+    assert coefficients.annual_offer == pytest.approx(
+        (14725.0, 13032.5, 23692.25, 20974.7375)
+    )
+    assert coefficients.annual_burn_loss == pytest.approx(
+        (0.0, 51.0, 122.655, 251.2432125)
+    )
+
+
+def test_burned_stock_reset_reseeds_and_restarts_the_decay_exponent() -> None:
+    cohort = _growth_cohort("reset")
+
+    coefficients = principal._principal_offer_coefficients(
+        cohort, 4, 0.85, period_length=2, burned_stock_reset=True
+    )
+
+    # Decade 2 restarts from burned_volume_m3 * v_1 / v_0 = 200 m3, and the
+    # annual_burn_loss exponent restarts at 0 (no loss in the decade's first
+    # year) while the burn influx keeps flowing.
+    assert coefficients.annual_burned_volume_m3 == pytest.approx(
+        (100.0, 170.0, 200.0, 307.7)
+    )
+    assert coefficients.annual_burn_loss == pytest.approx((0.0, 51.0, 0.0, 92.31))
+    assert coefficients.annual_offer == pytest.approx(
+        (14725.0, 13032.5, 23750.0, 21023.825)
+    )
+
+
+def test_grade_clock_indexes_the_mix_at_year_modulo_period() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="clock",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        green_volume_m3=100.0,
+        burned_volume_m3=100.0,
+        cashflow=0.0,
+        burned_value=7_600.0,
+        burn_rate=0.0,
+        burned_grade_mix=(0.2, 0.6, 0.2, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+    )
+
+    clocked = principal._annual_burned_values(cohort, 4, grade_clock_period=2)
+    unclocked = principal._annual_burned_values(cohort, 4)
+
+    assert clocked[0] == pytest.approx(unclocked[0])
+    assert clocked[1] == pytest.approx(unclocked[1])
+    assert clocked[2] == pytest.approx(unclocked[0])
+    assert clocked[3] == pytest.approx(unclocked[1])
+    assert abs(unclocked[2] - unclocked[0]) > 1.0  # the clock really wraps
+
+
+def test_growth_scales_the_legacy_simple_branch_cashflow() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="simple-growth",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=10.0,
+        green_volume_m3=1000.0,
+        burned_volume_m3=100.0,
+        cashflow=500.0,
+        burned_value=1000.0,
+        burn_rate=0.0,
+        decadal_volume_scale=(100.0, 200.0),
+    )
+
+    coefficients = principal._principal_offer_coefficients(
+        cohort, 4, 0.85, period_length=2
+    )
+
+    # Year 0 is the parsed t=0 volume; later decades double the per-ha
+    # volume, so the cashflow and the static burned volume scale by 2.
+    assert coefficients.annual_offer == pytest.approx((500.0, 500.0, 1000.0, 1000.0))
+    assert coefficients.annual_burned_volume_m3 == pytest.approx(
+        (100.0, 100.0, 200.0, 200.0)
+    )
+
+
+def test_growth_scales_aac_burned_cap_and_ceiling_row_coefficients() -> None:
+    cohort = _growth_cohort("rows", burn_rate=0.0)
+    horizon = 4
+
+    built = principal.build_principal_lp(
+        [cohort],
+        horizon=horizon,
+        aac_annual_m3=1e9,
+        burned_limit_annual_m3=1e9,
+        cohort_ceilings_m3=[(0.0,) * horizon],
+        period_length=2,
+    )
+
+    # Row order: horizon cum_offer rows, one offer_once row, then the AAC and
+    # burned-cap rows interleaved per year, then the horizon ceiling rows.
+    aac_rows = [_row_entries(built, horizon + 1 + 2 * year) for year in range(horizon)]
+    burned_rows = [
+        _row_entries(built, horizon + 2 + 2 * year) for year in range(horizon)
+    ]
+    ceiling_rows = [
+        _row_entries(built, 5 + 2 * horizon + year) for year in range(horizon)
+    ]
+
+    assert aac_rows[0] == {0: 1000.0}
+    assert aac_rows[2] == {2: 2000.0}
+    assert burned_rows[0] == {0: 100.0}
+    assert burned_rows[2] == {2: 200.0}
+    assert ceiling_rows[0] == {0: 1000.0}
+    assert ceiling_rows[3] == {3: 2000.0}
+
+
+def test_growth_solve_offers_the_grown_volume_once() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="solve-growth",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=10.0,
+        green_volume_m3=1000.0,
+        burned_volume_m3=0.0,
+        cashflow=1000.0,
+        burned_value=0.0,
+        burn_rate=0.0,
+        decadal_volume_scale=(100.0, 200.0),
+    )
+
+    static_cohort = dataclasses.replace(cohort, decadal_volume_scale=None)
+    grown = principal.solve_principal(
+        [cohort], horizon=4, aac_annual_m3=1e12, period_length=2
+    )
+    static = principal.solve_principal(
+        [static_cohort], horizon=4, aac_annual_m3=1e12
+    )
+
+    # A decade-2 offer is worth its grown volume (2 x 1000 m3), so the LP
+    # takes the whole single offer there instead of at the t=0 volume.
+    assert grown.objective_value == pytest.approx(2_000.0)
+    assert static.objective_value == pytest.approx(1_000.0)
+    assert sum(
+        volumes.green_volume_m3 for volumes in grown.per_year_volumes
+    ) == pytest.approx(2_000.0)
+    assert sum(
+        volumes.green_volume_m3 for volumes in static.per_year_volumes
+    ) == pytest.approx(1_000.0)
+
+
+def test_growth_parameter_validation_fails_fast() -> None:
+    cohort = _growth_cohort("growth")
+
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal.build_principal_lp([cohort], horizon=4)
+    assert excinfo.value.code == "principal_invalid_decadal_volume_scale"
+
+    for scale in [(100.0,), (100.0, -1.0), (100.0, float("nan"))]:
+        malformed = dataclasses.replace(cohort, decadal_volume_scale=scale)
+        with pytest.raises(principal.PrincipalError) as excinfo:
+            principal.build_principal_lp([malformed], horizon=4, period_length=2)
+        assert excinfo.value.code == "principal_invalid_decadal_volume_scale"
+
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal.build_principal_lp([cohort], horizon=4, period_length=0)
+    assert excinfo.value.code == "principal_invalid_period_length"
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal.build_principal_lp([cohort], horizon=4, grade_clock_period=0)
+    assert excinfo.value.code == "principal_invalid_grade_clock"
+    with pytest.raises(principal.PrincipalError) as excinfo:
+        principal.build_principal_lp([cohort], horizon=4, burned_stock_reset=True)
+    assert excinfo.value.code == "principal_invalid_burned_stock_reset"

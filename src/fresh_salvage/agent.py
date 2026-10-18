@@ -94,11 +94,38 @@ Documented deviations from the prototype
 7. **Subsidy basis.** The subsidy is paid per m3 of burned volume actually
    salvaged; the prototype paid it on the stand's full ``Total_Burned_Vol``
    whenever the stand was harvested.
+
+Phase 8 extensions (single-pass planning)
+-----------------------------------------
+Three optional inputs change coefficients and accounting without adding
+decision variables:
+
+- ``AgentCohort.decadal_volume_scale`` carries absolute per-ha volumes
+  (m3/ha) at the unclamped decadal ages ``age0 + L*k`` (constant extension
+  beyond the last tabulated curve age, the WS3 valuation convention).
+  ``H``/``S``/``V``/``B`` stay fractions of the t=0 cohort and every margin
+  multiplies ``area_ha * v_k(y)``. Burned inventory is carried in the current
+  decade's per-ha units, so the first-year burned and salvage rows of decade
+  ``k+1`` multiply the ``B[t-1]`` coefficient by ``v_k / v_{k+1}`` (linear
+  and volume-conserving). A boundary with ``v_{k+1} = 0 < v_k`` cannot be
+  re-expressed and fails fast (``agent_degenerate_growth_ratio``). ``None``
+  keeps the static t=0 volumes of the rolling-horizon path.
+- ``grade_clock_period`` (``None`` = LP-year index) prices the annual grade
+  mix at ``year % period`` (D5). Burned stock aged more than one period is
+  priced at index ``year mod period``; that wrap is intended and mirrors the
+  rolling-horizon window indexing.
+- ``burned_stock_reset`` zeroes the carried ``B[t-1]`` coefficient at every
+  decade boundary, dropping the inventory exactly as the rolling-horizon
+  boundary does (D4, ``rh.py`` "Burned-stock boundary").
+
+With the defaults, or with a horizon of at most one decade, all three
+reduce bit-exactly to the rolling-horizon LP (equivalence tests).
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -162,6 +189,12 @@ class AgentCohort:
     ``green_price_m3``/``burned_price_m3`` are the development type's initial
     volume-weighted average prices ($/m3). Later burned prices use the
     predetermined annual grade mix.
+
+    ``decadal_volume_scale`` (optional, the single-pass growth surface) holds
+    one absolute per-ha volume (m3/ha) per decade ``k`` at the unclamped age
+    ``age0 + period_length*k`` (see
+    :func:`fresh_salvage.principal.decadal_per_ha_volumes`). ``None`` keeps
+    the static t=0 volumes of the rolling-horizon path.
     """
 
     cohort_id: str
@@ -174,6 +207,7 @@ class AgentCohort:
     burned_price_m3: float
     burned_grade_mix: tuple[float, ...] | None = None
     burned_grade_prices: tuple[float, ...] | None = None
+    decadal_volume_scale: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +317,9 @@ def build_agent_lp(
     decay_rate: float = fire.DEFAULT_BURNED_DECAY_RATE,
     discount_rate: float = 0.03,
     economics: Economics | None = None,
+    period_length: int | None = None,
+    grade_clock_period: int | None = None,
+    burned_stock_reset: bool = False,
 ) -> AgentLP:
     """Build the continuous agent harvest/salvage LP as a HiGHS model.
 
@@ -292,6 +329,15 @@ def build_agent_lp(
     fractions as upper bounds; ``V``/``B`` are bounded to ``[0, 1]``.
     ``economics`` carries the price/cost/rate surface of the margin
     coefficients (defaults to the calibrated ``data.py`` constants).
+
+    ``period_length`` is the single-pass decade length; it is required by a
+    cohort's decadal growth surface and by ``burned_stock_reset`` and
+    ignored otherwise. ``grade_clock_period`` prices the annual grade mix at
+    ``year % period`` (D5; ``None`` keeps the LP-year index, the
+    rolling-horizon default). ``burned_stock_reset`` drops the carried
+    burned inventory at every decade boundary (D4), mimicking ``rh-run``.
+    With the defaults, or with a horizon of at most one decade, the LP is
+    bit-identical to the rolling-horizon LP (equivalence tests).
     """
 
     if economics is None:
@@ -323,6 +369,21 @@ def build_agent_lp(
             "agent_invalid_discount",
             f"discount_rate cannot be negative: {discount_rate}",
         )
+    if period_length is not None and period_length <= 0:
+        raise AgentError(
+            "agent_invalid_period_length",
+            f"period_length must be positive, got {period_length}",
+        )
+    if grade_clock_period is not None and grade_clock_period <= 0:
+        raise AgentError(
+            "agent_invalid_grade_clock",
+            f"grade_clock_period must be positive, got {grade_clock_period}",
+        )
+    if burned_stock_reset and period_length is None:
+        raise AgentError(
+            "agent_invalid_burned_stock_reset",
+            "burned_stock_reset requires period_length",
+        )
 
     cohort_count = len(cohorts)
     block = cohort_count * horizon
@@ -352,21 +413,22 @@ def build_agent_lp(
             - economics.green_transport_cost_per_m3
             - economics.green_stumpage_rate
         )
+        volumes = _cohort_year_volumes(cohort, horizon, period_length)
         base = c_index * horizon
         for year in range(horizon):
             discount_factor = 1.0 / (1.0 + discount_rate) ** (year + 1)
             salvage_margin = (
-                _annual_burned_price(cohort, year)
+                _annual_burned_price(cohort, year, grade_clock_period=grade_clock_period)
                 - economics.burned_harvest_cost
                 - economics.burned_transport_cost_per_m3
                 - economics.burned_stumpage_rate
                 + economics.subsidy_rate_per_m3
             )
             costs[harvest_offset + base + year] = (
-                discount_factor * cohort.standing_volume_m3 * green_margin
+                discount_factor * volumes[year] * green_margin
             )
             costs[salvage_offset + base + year] = (
-                discount_factor * cohort.standing_volume_m3 * salvage_margin
+                discount_factor * volumes[year] * salvage_margin
             )
     model.changeColsCost(
         total_columns,
@@ -378,6 +440,7 @@ def build_agent_lp(
         rate = cohort.burn_rate
         survival = 1.0 - rate
         base = c_index * horizon
+        per_ha = _decadal_scale_array(cohort, horizon, period_length)
         for year in range(horizon):
             harvest_col = harvest_offset + base + year
             salvage_col = salvage_offset + base + year
@@ -414,6 +477,17 @@ def build_agent_lp(
                 continue
             previous_live_col = live_offset + base + year - 1
             previous_burned_col = burned_offset + base + year - 1
+            # Burned inventory is carried in the current decade's per-ha
+            # volume units: across a decade boundary the B[t-1] coefficient
+            # is rescaled by v_k / v_{k+1} (volume-conserving); under
+            # burned_stock_reset it is dropped instead.
+            boundary_ratio = _decade_boundary_ratio(
+                cohort,
+                per_ha,
+                year,
+                period_length,
+                burned_stock_reset=burned_stock_reset,
+            )
             # V[c,t] - (1 - R) * V[c,t-1] + (1 - R) * H[c,t] = 0
             model.addRow(
                 0.0,
@@ -422,7 +496,7 @@ def build_agent_lp(
                 np.array([live_col, previous_live_col, harvest_col], dtype=np.int32),
                 np.array([1.0, -survival, survival]),
             )
-            # B[c,t] - d*B[c,t-1] - d*R*V[c,t-1] + d*R*H[c,t] + d*S[c,t] = 0
+            # B[c,t] - d*r*B[c,t-1] - d*R*V[c,t-1] + d*R*H[c,t] + d*S[c,t] = 0
             model.addRow(
                 0.0,
                 0.0,
@@ -438,10 +512,16 @@ def build_agent_lp(
                     dtype=np.int32,
                 ),
                 np.array(
-                    [1.0, -decay_rate, -decay_rate * rate, decay_rate * rate, decay_rate]
+                    [
+                        1.0,
+                        -decay_rate * boundary_ratio,
+                        -decay_rate * rate,
+                        decay_rate * rate,
+                        decay_rate,
+                    ]
                 ),
             )
-            # S[c,t] - B[c,t-1] - R*V[c,t-1] + R*H[c,t] <= 0
+            # S[c,t] - r*B[c,t-1] - R*V[c,t-1] + R*H[c,t] <= 0
             model.addRow(
                 -highspy.kHighsInf,
                 0.0,
@@ -450,7 +530,7 @@ def build_agent_lp(
                     [salvage_col, previous_burned_col, previous_live_col, harvest_col],
                     dtype=np.int32,
                 ),
-                np.array([1.0, -1.0, -rate, rate]),
+                np.array([1.0, -boundary_ratio, -rate, rate]),
             )
         # sell_once[c]: sum_t H[c,t] + sum_t S[c,t] <= 1
         indices = np.concatenate(
@@ -469,8 +549,136 @@ def build_agent_lp(
     return AgentLP(model=model, decision_columns=decision_columns, horizon=horizon)
 
 
-def _annual_burned_price(cohort: AgentCohort, year: int) -> float:
-    """Return the predetermined burned price for a zero-based model year."""
+def _decadal_scale_array(
+    cohort: AgentCohort, horizon: int, period_length: int | None
+) -> np.ndarray | None:
+    """Return a cohort's trusted decadal per-ha volumes, or ``None``."""
+
+    if cohort.decadal_volume_scale is None:
+        return None
+    if period_length is None:
+        raise AgentError(
+            "agent_invalid_decadal_volume_scale",
+            f"cohort {cohort.cohort_id!r} carries a decadal volume scale but "
+            "period_length is not set",
+        )
+    return _parse_decadal_volume_scale(
+        cohort.decadal_volume_scale, horizon, period_length
+    )
+
+
+def _parse_decadal_volume_scale(
+    scale: tuple[float, ...], horizon: int, period_length: int
+) -> np.ndarray:
+    """Parse a cohort's decadal per-ha volumes into a trusted array.
+
+    Boundary parser for the single-pass growth surface: exactly
+    ``ceil(horizon / period_length)`` entries, each finite and non-negative.
+    Raises ``AgentError`` on any violation; LP construction then trusts the
+    returned array.
+    """
+
+    decade_count = math.ceil(horizon / period_length)
+    values = np.asarray(scale, dtype=float)
+    if values.ndim != 1 or len(values) != decade_count:
+        raise AgentError(
+            "agent_invalid_decadal_volume_scale",
+            f"decadal volume scale carries {values.size} entries for a horizon "
+            f"of {horizon} years and a period length of {period_length} "
+            f"(expected {decade_count})",
+        )
+    if not np.all(np.isfinite(values)):
+        raise AgentError(
+            "agent_invalid_decadal_volume_scale",
+            "decadal volume scale entries must be finite (m3/ha)",
+        )
+    if np.any(values < 0.0):
+        raise AgentError(
+            "agent_invalid_decadal_volume_scale",
+            "decadal volume scale entries cannot be negative (m3/ha)",
+        )
+    return values
+
+
+def _cohort_year_volumes(
+    cohort: AgentCohort, horizon: int, period_length: int | None
+) -> np.ndarray:
+    """Expand a cohort's growth surface to per-year standing volumes (m3).
+
+    Year 0 keeps the parsed t=0 standing volume bit-exactly (the scale's
+    first entry is the same curve lookup), which is what makes a horizon of
+    at most ``period_length`` reduce to the rolling-horizon LP. Without a
+    ``decadal_volume_scale`` every year carries the static t=0 volume.
+    """
+
+    per_ha = _decadal_scale_array(cohort, horizon, period_length)
+    if per_ha is None:
+        return np.full(horizon, cohort.standing_volume_m3)
+    decade = np.minimum(np.arange(horizon) // period_length, len(per_ha) - 1)
+    volumes = np.full(horizon, cohort.standing_volume_m3)
+    after_first_decade = decade > 0
+    volumes[after_first_decade] = cohort.area_ha * per_ha[decade[after_first_decade]]
+    return volumes
+
+
+def _decade_boundary_ratio(
+    cohort: AgentCohort,
+    per_ha: np.ndarray | None,
+    year: int,
+    period_length: int | None,
+    *,
+    burned_stock_reset: bool,
+) -> float:
+    """Return the carried-inventory ratio ``v_k / v_{k+1}`` of one LP year.
+
+    ``1.0`` inside a decade (and for the whole horizon without a growth
+    surface); at a decade boundary with ``burned_stock_reset`` the carried
+    inventory is dropped instead, so the coefficient is ``0.0``. A boundary
+    where ``v_{k+1} = 0 < v_k`` cannot re-express a positive burned inventory
+    and fails fast; two zero-volume decades carry no inventory (ratio 1.0).
+    """
+
+    if period_length is None or year % period_length != 0:
+        return 1.0
+    if burned_stock_reset:
+        return 0.0
+    if per_ha is None:
+        return 1.0
+    previous = float(per_ha[year // period_length - 1])
+    current = float(per_ha[year // period_length])
+    if current == 0.0:
+        if previous > 0.0:
+            raise AgentError(
+                "agent_degenerate_growth_ratio",
+                f"cohort {cohort.cohort_id!r} decade {year // period_length} has "
+                f"per-ha volume 0 after {previous} m3/ha: a positive carried "
+                "burned inventory cannot be re-expressed in zero-volume units",
+            )
+        return 1.0
+    return previous / current
+
+
+def _grade_clock_index(grade_clock_period: int | None, year: int) -> int:
+    """Return the grade-mix index of a zero-based model year (D5)."""
+
+    if grade_clock_period is None:
+        return year
+    if grade_clock_period <= 0:
+        raise AgentError(
+            "agent_invalid_grade_clock",
+            f"grade_clock_period must be positive, got {grade_clock_period}",
+        )
+    return year % grade_clock_period
+
+
+def _annual_burned_price(
+    cohort: AgentCohort, year: int, *, grade_clock_period: int | None = None
+) -> float:
+    """Return the predetermined burned price for a zero-based model year.
+
+    ``grade_clock_period`` indexes the predetermined mix at ``year % period``
+    instead of the LP year (D5); ``None`` keeps the rolling-horizon index.
+    """
 
     if cohort.burned_grade_mix is None or cohort.burned_grade_prices is None:
         return cohort.burned_price_m3
@@ -478,17 +686,21 @@ def _annual_burned_price(cohort: AgentCohort, year: int) -> float:
     prices = dict(zip(GRADE_ORDER, cohort.burned_grade_prices, strict=True))
     if sum(initial_mix.values()) <= 0.0:
         return cohort.burned_price_m3
-    mix = annual_grade_mix(initial_mix, year + 1)[year]
+    index = _grade_clock_index(grade_clock_period, year)
+    mix = annual_grade_mix(initial_mix, index + 1)[index]
     return weighted_grade_price(mix, prices)
 
 
-def _annual_burned_grade_mix(cohort: AgentCohort, year: int) -> tuple[float, ...]:
+def _annual_burned_grade_mix(
+    cohort: AgentCohort, year: int, *, grade_clock_period: int | None = None
+) -> tuple[float, ...]:
     """Return the predetermined grade mix used to report ``B[c,t]``."""
 
     if cohort.burned_grade_mix is None or sum(cohort.burned_grade_mix) <= 0.0:
         return (0.0, 0.0, 0.0, 1.0)
     initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
-    return annual_grade_mix(initial_mix, year + 1)[year]
+    index = _grade_clock_index(grade_clock_period, year)
+    return annual_grade_mix(initial_mix, index + 1)[index]
 
 
 def solve_agent(
@@ -499,12 +711,18 @@ def solve_agent(
     decay_rate: float = fire.DEFAULT_BURNED_DECAY_RATE,
     discount_rate: float = 0.03,
     economics: Economics | None = None,
+    period_length: int | None = None,
+    grade_clock_period: int | None = None,
+    burned_stock_reset: bool = False,
     run_id: str = "agent-solve",
 ) -> AgentResult:
     """Build and solve the agent LP; return the typed result.
 
     Raises ``AgentError`` when the solve does not reach optimal status.
     Decision rows are emitted for every (cohort, year) pair, zeros included.
+    ``period_length``/``grade_clock_period``/``burned_stock_reset`` are the
+    Phase 8 single-pass switches of :func:`build_agent_lp`; with the defaults
+    the reported per-year volumes are the static t=0 volumes.
     """
 
     built = build_agent_lp(
@@ -514,6 +732,9 @@ def solve_agent(
         decay_rate=decay_rate,
         discount_rate=discount_rate,
         economics=economics,
+        period_length=period_length,
+        grade_clock_period=grade_clock_period,
+        burned_stock_reset=burned_stock_reset,
     )
     solve_started = time.monotonic()
     built.model.run()
@@ -531,6 +752,9 @@ def solve_agent(
 
     cohort_count = len(cohorts)
     block = cohort_count * horizon
+    year_volumes = [
+        _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
+    ]
     decisions: list[AgentDecisionRecord] = []
     harvest_m3 = np.zeros(horizon)
     salvage_m3 = np.zeros(horizon)
@@ -564,14 +788,16 @@ def solve_agent(
         # parsed fractions are dust-snapped to [0, 1], so the exposed volume
         # can only undershoot zero by solver dust.
         influx = fire.burn_influx(max(0.0, live_before - harvest), cohort.burn_rate)
-        volume = cohort.standing_volume_m3
+        volume = float(year_volumes[c_index][year])
         harvest_m3[year] += harvest * volume
         salvage_m3[year] += salvage * volume
         influx_m3[year] += influx * volume
         live_end_m3[year] += live * volume
         burned_end_m3[year] += burned * volume
         for grade, share in zip(
-            GRADE_ORDER, _annual_burned_grade_mix(cohort, year), strict=True
+            GRADE_ORDER,
+            _annual_burned_grade_mix(cohort, year, grade_clock_period=grade_clock_period),
+            strict=True,
         ):
             burned_grade_m3[grade][year] += burned * volume * share
         decisions.append(
