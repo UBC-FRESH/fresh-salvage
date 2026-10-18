@@ -504,3 +504,136 @@ def test_problem_lp_dimensions_counts_rows_and_columns() -> None:
         "lp_rows": 2,
         "lp_columns": 3,
     }
+
+
+# --- schedule volume apportioning --------------------------------------------
+
+DUPLICATED_DTYPE = ("29", "managed", "2902005", "sbps_pl", "2922005")
+SINGLE_DTYPE = ("29", "managed", "2901001", "ms_pli", "2921001")
+YIELD_M3_PER_HA = {DUPLICATED_DTYPE: 141.0, SINGLE_DTYPE: 101.6}
+
+
+class _ScheduleStubModel:
+    """ws3 ForestModel stand-in mirroring ``compile_product`` group totals.
+
+    Like ws3, ``compile_product`` filters the applied schedule on period,
+    action, development type and age, and returns summed area times yield, so
+    every row of a multi-row group sees the same group total.
+    """
+
+    def __init__(self, raw_schedule: list[tuple]) -> None:
+        self.raw_schedule = raw_schedule
+        self.applied_schedule: list[tuple] = []
+        self.product_queries: list[tuple] = []
+
+    def compile_schedule(self, problem: object) -> list[tuple]:
+        return list(self.raw_schedule)
+
+    def apply_schedule(
+        self, schedule: list[tuple], compile_t_ycomps: bool, compile_c_ycomps: bool
+    ) -> None:
+        self.applied_schedule = schedule
+
+    def compile_product(
+        self,
+        period: int,
+        expr: str,
+        acode: str,
+        dtype_keys: list[tuple],
+        age: int,
+        coeff: bool = False,
+    ) -> float:
+        assert (expr, coeff) == ("totvol", False)
+        self.product_queries.append((period, dtype_keys[0], age, acode))
+        operated_area = sum(
+            area
+            for dtype_key, row_age, area, action, row_period, _etype in self.applied_schedule
+            if (dtype_key, row_age, action, row_period) == (dtype_keys[0], age, acode, period)
+        )
+        return operated_area * YIELD_M3_PER_HA[dtype_keys[0]]
+
+
+def _duplicate_group_schedule() -> list[tuple]:
+    """Raw WS3 rows: one group split over two Model-I paths, one single row."""
+
+    return [
+        (DUPLICATED_DTYPE, 145, 244.593, "cc", 1, "_existing"),
+        (DUPLICATED_DTYPE, 145, 499.932, "cc", 1, "_existing"),
+        (SINGLE_DTYPE, 235, 172.369, "cc", 1, "_existing"),
+        (DUPLICATED_DTYPE, 155, 30.0, "cc", 2, "_existing"),
+        (DUPLICATED_DTYPE, 155, 10.0, "cc", 2, "_existing"),
+        (DUPLICATED_DTYPE, 155, 60.0, "cc", 2, "_existing"),
+    ]
+
+
+def _schedule_volume(schedule: pd.DataFrame, period: int, age_class: int) -> pd.Series:
+    rows = schedule[(schedule["period"] == period) & (schedule["age_class"] == age_class)]
+    return rows.set_index("area_ha")["volume_m3"]
+
+
+def test_compile_schedule_apportions_duplicate_group_volume_by_area(
+    tmp_path: Path,
+) -> None:
+    model = _ScheduleStubModel(_duplicate_group_schedule())
+    config = _sample_config(tmp_path)
+
+    schedule, objective_value = ws3._compile_schedule(model, object(), config)
+
+    duplicated_yield = YIELD_M3_PER_HA[DUPLICATED_DTYPE]
+    period1_group = _schedule_volume(schedule, period=1, age_class=145)
+    assert period1_group.to_dict() == pytest.approx(
+        {244.593: 244.593 * duplicated_yield, 499.932: 499.932 * duplicated_yield}
+    )
+    assert period1_group.sum() == pytest.approx((244.593 + 499.932) * duplicated_yield)
+    period2_group = _schedule_volume(schedule, period=2, age_class=155)
+    assert period2_group.sum() == pytest.approx(100.0 * duplicated_yield)
+    single_row = _schedule_volume(schedule, period=1, age_class=235)
+    assert single_row.tolist() == [172.369 * YIELD_M3_PER_HA[SINGLE_DTYPE]]
+
+    group_total_m3 = (
+        (244.593 + 499.932 + 100.0) * duplicated_yield
+        + 172.369 * YIELD_M3_PER_HA[SINGLE_DTYPE]
+    )
+    assert schedule["volume_m3"].sum() == pytest.approx(group_total_m3)
+    assert objective_value == pytest.approx(config.objective.utilization * group_total_m3)
+
+
+def test_compile_schedule_compiles_each_group_volume_once(tmp_path: Path) -> None:
+    model = _ScheduleStubModel(_duplicate_group_schedule())
+
+    ws3._compile_schedule(model, object(), _sample_config(tmp_path))
+
+    assert model.product_queries == [
+        (1, DUPLICATED_DTYPE, 145, "cc"),
+        (1, SINGLE_DTYPE, 235, "cc"),
+        (2, DUPLICATED_DTYPE, 155, "cc"),
+    ]
+
+
+def test_compile_schedule_zero_area_group_gets_zero_volume(tmp_path: Path) -> None:
+    model = _ScheduleStubModel(
+        [
+            (DUPLICATED_DTYPE, 145, 0.0, "cc", 1, "_existing"),
+            (DUPLICATED_DTYPE, 145, 0.0, "cc", 1, "_existing"),
+        ]
+    )
+
+    schedule, objective_value = ws3._compile_schedule(
+        model, object(), _sample_config(tmp_path)
+    )
+
+    assert schedule["volume_m3"].tolist() == [0.0, 0.0]
+    assert objective_value == 0.0
+
+
+def test_apportion_group_volumes_rejects_volume_without_area() -> None:
+    schedule = pd.DataFrame(
+        [(DUPLICATED_DTYPE, 145, 0.0, "cc", 1, "_existing")],
+        columns=list(ws3.SCHEDULE_RAW_COLUMNS),
+    )
+    group_volumes = {(1, DUPLICATED_DTYPE, 145, "cc"): 10.0}
+
+    with pytest.raises(ws3.WS3Error) as excinfo:
+        ws3._apportion_group_volumes(schedule, group_volumes)
+
+    assert excinfo.value.code == "ws3_schedule_volume_without_area"

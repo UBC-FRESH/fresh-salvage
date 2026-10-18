@@ -308,6 +308,8 @@ cover exactly the implemented window at 1-year timesteps:
        build and solve the horizon-period WS3 problem; a non-optimal
            status is fatal (ws3_solve_not_optimal)
        compile the schedule; sum period-1 `cc` volume per cohort
+           (row volumes are area shares of each WS3 group total, so
+           duplicate Model-I-path rows never double-count a cohort)
        split each cohort's decadal volume uniformly into period_length
            annual green-volume ceilings (the split conserves volume)
        solve the principal LP over the implemented decade
