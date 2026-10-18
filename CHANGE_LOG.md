@@ -5,6 +5,28 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 9 feasibility brief completed. The condensed assessment is
+  `planning/phase9-ws4-assessment.md`: WS4 reviewed at `b380c128`
+  (Apache-2.0, `0.1.0`, Phase 12 active), a weighted goal-programming
+  metaheuristic with soft targets and no optimality claim; premise
+  corrections (a dataset build step remains; capability superset does not
+  imply semantic parity — the all-zero product-criterion patch targets and
+  the mill-destination policy difference are WS4's own measured backlog
+  items; spatial features are inert on TSA29 until topology/roads data
+  exist); TSA29 data plumbing (both ingest formats and fragments present,
+  crosswalk and the 2903xxx AU coverage the top unknowns, topology empty, no
+  road/mill tables or rates); capability matrix; three integration paths with
+  the path (b) repo-contract conflict; decisive questions; viability and kill
+  criteria; and the P9.1+P9.2-first sequencing (~4-6 person-days) with a
+  checkpoint before any coupling. Scoping refined in
+  `planning/phase9-ws4-backend-spike.md` (P9.1: `ws4 validate` clean on
+  matrix+fragments ingest, crosswalk note incl. the 2903xxx AU question,
+  simulate smoke, wall/RSS recorded; P9.2: mirror the WS3 target set, measure
+  level reachability and iteration/scale numbers, state whether the WS3 level
+  is attainable), with the scale/candidate, soft-constraint, patch-criterion,
+  and inert-`--time-limit` risks recorded. New P9.5 topology/roads data
+  assessment issue (#45) added to the roadmap; issue bodies #40-#44 updated
+  to the refined scoping.
 - Kickoff: Phase 9 WS4 backend spike scoped on `feature/p9-ws4-backend` as a
   decision-gated evaluation of swapping the WS3 wood-supply backend (and
   possibly the custom principal/agent LPs) for WS4

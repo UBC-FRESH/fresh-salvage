@@ -238,22 +238,26 @@ Parent issue: #40
 
 Branch: `feature/p9-ws4-backend`
 
-Status: active (spike; seed scoping)
+Status: active (spike; feasibility brief complete; P9.1/P9.2 pending)
 
 Goal: evaluate whether WS4 (https://github.com/UBC-FRESH/ws4) can replace the
 WS3 wood-supply backend — and possibly the custom principal/agent HiGHS LPs —
-in `fresh-salvage`. WS4 reportedly skips the LP matrix build in favour of a
-heuristic search (simulated annealing) and adds spatial features WS3 lacks
-(patch size distribution targets, roads, mill deliveries) that could better
-capture net value creation per block. This is a spike with a decision gate,
-not a big-bang swap: the WS3-based pipeline (including the Phase 8 results)
+in `fresh-salvage`. WS4 skips the LP matrix build in favour of a
+goal-programming metaheuristic search (simulated annealing, tabu, ILS) and
+adds spatial features WS3 lacks (patch size distribution targets, roads, mill
+deliveries) that could better capture net value creation per block. This is a
+spike with a decision gate, not a big-bang swap: the WS3-based pipeline
 remains the reference until a swap is proven on evidence. Seed scoping:
-`planning/phase9-ws4-backend-spike.md`.
+`planning/phase9-ws4-backend-spike.md`. Feasibility assessment (premise
+corrections: a dataset build step remains; capability superset does not imply
+semantic parity; spatial features are inert on TSA29 until topology/roads
+data exist): `planning/phase9-ws4-assessment.md`.
 
 - [ ] P9.1 WS4 intake and API smoke (#41).
 - [ ] P9.2 Schedule-only bridge proof of concept (#42).
 - [ ] P9.3 Coupled subsidy-scan experiment (#43).
 - [ ] P9.4 Evaluation and decision gate (#44).
+- [ ] P9.5 Topology and roads data assessment for TSA29 (#45).
 
 Gate criteria (continue only if): WS4 ingests TSA29-comparable inputs and
 yields usable schedules; performance is competitive with the current stack; a
@@ -261,7 +265,10 @@ coupling path exists without unacceptable hacks or data fabrication; and the
 result can be explained/defended as cleanly as the current stack. Candidate
 integration paths to assess: (a) drop-in schedule backend, (b)
 offer/take-leave block formulation, (c) full swap to WS4-side policy
-wrappers.
+wrappers. Checkpoint: run P9.1+P9.2 first (~4-6 person-days) and decide
+continue/kill/defer before P9.3/P9.4; path (b) is out of contract (AGENTS.md
+linear-pipeline rule) without a maintainer-approved amendment. See
+`planning/phase9-ws4-assessment.md`, sections 5-8.
 
 ## Current Next Steps
 
