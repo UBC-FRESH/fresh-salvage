@@ -144,7 +144,6 @@ Open plumbing items, in priority order:
   exist under the instance's `data/downloads/` directory, but they are
   unconverted and carry neither the rate model nor the block-to-vertex
   linkage WS4 expects. This is P9.5's subject.
-- `au_table.csv` partial (see the AU item above).
 
 The good news is that both construction paths have real TSA29 inputs; neither
 has ever been run against this instance. That is P9.1.
@@ -264,7 +263,7 @@ scale-up work.
 - WS4 repository `UBC-FRESH/ws4`, reviewed at `b380c128`; paths cited above
   are repository-relative.
 - Spike scoping note: `planning/phase9-ws4-backend-spike.md`.
-- Parent issue: #40; children: #41–#44, plus the P9.5 topology/roads issue.
+- Parent issue: #40; children: #41–#45 (P9.5 is the topology/roads issue).
 - femic TSA29 instance: the `femic` repository's
   `external/femic-tsa29-instance` checkout (matrix under
   `models/tsa29_patchworks_model/`, build inputs under
