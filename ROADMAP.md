@@ -239,7 +239,7 @@ Parent issue: #33
 Branch: `feature/p8-single-pass-baseline` (built on PR #32,
 `fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
 
-Status: active (P8.1-P8.4 complete)
+Status: active (P8.1-P8.5 complete)
 
 Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
 principal -> agent -> fire pipeline solved once at t=0 over the full run
@@ -265,8 +265,13 @@ surface, artifact contract, test plan, risks):
       replay; `planning_mode`/`burned_stock_reset` config validation, the
       `run_planning` dispatcher, the `planning_mode` ensemble axis, and the
       steps=1 oracle (synthetic WS3 stub plus a gated real-data variant).
-- [ ] P8.5 Full-TSA29 tractability probe and paired RH vs single-pass
-      evidence run (#38).
+- [x] P8.5 Full-TSA29 tractability probe and paired RH vs single-pass
+      evidence run (#38): probe recorded LP build/solve scaling (within
+      budget at T=100), three-arm evidence run at an active subsidy
+      (`outputs/p8_evidence/p8-evidence-summary.{md,json}`; decade 1
+      bit-identical, divergence from decade 2, the RH burned-stock boundary
+      artifact isolated by the reset arm), and a bit-identical regen-replay
+      memoization (replay 73.2 s -> 17.9 s).
 - [ ] P8.6 Docs, examples, CHANGE_LOG, and roadmap closeout (#39).
 
 ## Current Next Steps

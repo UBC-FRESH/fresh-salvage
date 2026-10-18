@@ -1,6 +1,6 @@
 # Phase 8: Single-Pass 100-Year Planning Baseline
 
-Status: active (P8.1-P8.4 implemented; P8.5-P8.6 open)
+Status: active (P8.1-P8.5 implemented; P8.6 open)
 
 Branch: `feature/p8-single-pass-baseline` (cut from
 `origin/fix/schedule-group-volume-dedup` at `9b5a0a0`, the PR #32 head;
@@ -247,7 +247,10 @@ the choices the spec left open and the corrections it surfaced.
     (0.08 s at decade 1 to 37 s at decade 10) because every decade re-simulates
     all active regen lineages; memoizing the zero-harvest trajectory by
     `(burn_rate, years)` would collapse it, as would vectorizing the Python
-    `addRow` LP builds (R2).
+    `addRow` LP builds (R2). P8.5 implemented the trajectory memoization
+    (`single_pass._zero_harvest_decade`) bit-identically (A/B 73.2 s -> 17.9 s
+    replay; full run 118.4 s -> 62.0 s); the LP `addRow` vectorization stays
+    future work (see the P8.5 note in section 6).
 
 ## 4. Configuration surface (P8.4)
 
@@ -530,15 +533,69 @@ the same next state. The full WS3 path needs the bridge (skip in CI), so
 the test also has a ws3-free variant that monkeypatches the WS3 stage with
 a synthetic schedule.
 
-### P8.5: tractability probe and paired evidence run (#38)
+### P8.5: tractability probe and paired evidence run (#38) — implemented
 
-Measure LP build and solve time for principal and agent at 30, 50, and 100
-years on full TSA29 (1,608 cohorts). If per-row Python `addRow` loops
-dominate, vectorize LP construction with `addRows` (CSR) while keeping the
-row order (equivalence tests stay green). Then make one paired evidence run,
-RH versus single pass, at a reference subsidy (calibrated default and a
-near-flip value), with and without `burned_stock_reset`. Record it in a
-planning note under `planning/`.
+Probe (first half; evidence comment on #38, performed on a byte-identical
+snapshot of the branch `principal.py`/`agent.py`). Principal and agent LP
+build + solve scale to `T=100` on full TSA29 (1,608 cohorts): worst case
+27.7 s build / 46.2 s solve / 2.4 GB peak RSS, so the batched-CSR rewrite and
+the recursive `cum_offer` form (R1/R2) are NOT required. The probe's
+recommended fix — caching the agent per-cohort grade-mix trajectory — landed
+in P8.4; the replay memoization below is the one P8.5 perf change.
+
+Paired evidence run (this task, current branch): three arms on the same
+active-subsidy surface — `subsidy_rate_per_m3: 30.0` (safely above the
+calibrated ~24 $/m3 salvage flip), `workers: 1`, `horizon: 15`,
+`period_length: 10`, `steps: 10`, all runs `optimal`. Configs sit beside their
+run dirs under `outputs/p8_evidence/` (`p8-rh-active.yaml`,
+`p8-single-pass-active.yaml`, `p8-single-pass-reset.yaml`); the full evidence
+summary is `outputs/p8_evidence/p8-evidence-summary.{md,json}` (gitignored,
+with input/artifact sha256, per-decade annual trajectories, per-decade
+objectives on both bases, and per-decade walls).
+
+| arm | green m3 | burned salvage m3 | area burned ha | principal obj | agent obj (base year) | wall s |
+| --- | --- | --- | --- | --- | --- | --- |
+| RH | 36,213,824 | 274,670 | 2,009,401 | 446,160,428 | 408,045,712 | 192.7 |
+| SP | 33,901,993 | 1,459,478 | 2,009,498 | 220,677,287 | 385,204,891 | 62.0 |
+| SP + reset | 33,901,969 | 243,739 | 2,009,498 | 393,816,972 | 382,939,773 | 62.4 |
+
+Findings:
+
+- **Decade 1 is bit-identical across all three arms** (the P8.4 oracle at full
+  scale: annual green/burned arrays and `area_burned_ha` equal). SP-vs-RH
+  divergence starts in decade 2 and grows with each re-planning step: green
+  |Δ|/RH is 11.6% in decade 2, 7-23% in decades 3-10, and RH's green total is
+  6.4% higher; area burned agrees within 0.3% per decade.
+- **The SP-vs-RH burned-salvage gap is dominated by the RH boundary
+  artifact.** Continuous-burn SP salvages 1.46M m3 (4.4x-8.7x RH per decade)
+  because its 100-year solve can draw on a continuously carried pool; the
+  reset arm lands near RH (243.7k vs RH 274.7k m3 total, 7.6-33% per decade).
+  The reset arm also pulls the principal objective much closer to RH
+  (393.8M vs SP 220.7M, RH 446.2M), while the green totals of the two SP arms
+  differ by only 23 m3 (decades 6-7 boundary effects). The agent totals are
+  similar across the SP arms (385.2M vs 382.9M) and below RH (408.0M).
+- Per-decade wall: RH 17.0-21.3 s (WS3 + both LPs + replay); SP replay-only
+  0.08 s (decade 1) growing to 8.8 s (decade 10) after the memoization below
+  (36 s before). RH's decade-1 record reproduces SP's decade-1 objectives to
+  4.8e-16 relative (principal) and 1.2e-16 (agent), with bit-equal annual
+  arrays; the manifests' base-year totals use the same D7 definition in both
+  modes.
+
+Replay memoization (perf, bit-identical): every decade re-simulated every
+active regen sub-cohort, so the replay cost grew super-linearly (0.08 s to
+36 s per decade). `single_pass._zero_harvest_decade` now simulates one fresh
+zero-harvest trajectory per distinct burn rate and hands each regen lineage
+its decade slice at the lineage's `elapsed_years` offset. Regenerated stands
+are never harvested or salvaged (D3), so their state is a pure continuation of
+the fresh formation state, and the slice applies exactly the year-by-year
+float operations `simulate_cohort_years` would — the replay is bit-identical
+(A/B on identical inputs: 73.2 s -> 17.9 s, 4.1x; full single-pass runs
+118.4 s -> 62.0 s / 116.4 s -> 62.4 s). Equivalence evidence: the new unit
+test `test_replay_regen_decade_slices_match_carried_state_simulation`, plus a
+file-by-file re-run diff (steps.jsonl, manifest, final state, and all 11 state
+snapshots byte-identical modulo timing fields). The LP `addRow`/CSR
+vectorization (R2) remains future work; the probe shows it is not required at
+`T=100`.
 
 ### P8.6: docs and closeout (#39)
 

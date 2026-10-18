@@ -5,6 +5,33 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 8 P8.5 (issue #38): full-TSA29 paired RH vs single-pass evidence at an
+  active subsidy, plus a bit-identical replay memoization.
+  - Three-arm evidence run (configs and run outputs under
+    `outputs/p8_evidence/`, gitignored; summary in
+    `p8-evidence-summary.{md,json}`): RH vs single pass vs single pass with
+    `burned_stock_reset`, at `subsidy_rate_per_m3: 30.0` (active region),
+    `workers: 1`, 10 decades x 10 years. Decade 1 is bit-identical across all
+    arms; SP-vs-RH divergence starts in decade 2 (green |Δ|/RH 11.6%, then
+    7-23%; RH green total +6.4%, area burned within 0.3% per decade). The
+    burned-salvage gap is dominated by the RH boundary artifact:
+    continuous-burn single pass salvages 1.46M m3 over the run vs RH 0.27M,
+    while the reset arm lands at 0.24M and pulls the principal objective
+    toward RH (393.8M vs SP 220.7M, RH 446.2M).
+  - `single_pass._zero_harvest_decade` memoizes one fresh zero-harvest
+    burn-rate trajectory and serves each regen sub-cohort its decade slice at
+    the lineage's `elapsed_years` offset. Regenerated stands are never
+    harvested or salvaged (D3), so the slice applies exactly the float
+    operations `simulate_cohort_years` would run on the carried state; replay
+    A/B on identical inputs 73.2 s -> 17.9 s (4.1x), full single-pass runs
+    118.4 s -> 62.0 s. Outputs re-run and verified bit-identical file-by-file
+    (steps.jsonl, manifest, final state, all 11 snapshots, modulo timing
+    fields); new unit test
+    `test_replay_regen_decade_slices_match_carried_state_simulation`.
+  - The tractability probe (evidence comment on #38) showed principal/agent
+    LP build + solve is within budget at T=100 (worst 27.7 s build, 46.2 s
+    solve, 2.4 GB peak RSS), so the batched-CSR LP assembly and recursive
+    `cum_offer` rewrites (planning R1/R2) remain future work.
 - Phase 8 P8.4 (issue #37): the single-pass 100-year orchestrator,
   `planning_mode`/`burned_stock_reset` config surface, `single-pass-run` CLI,
   and ensemble dispatch.
