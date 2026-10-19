@@ -1081,6 +1081,73 @@ def test_cli_single_pass_run_rejects_invalid_single_pass_config(
     assert "horizon >= steps" in payload["diagnostic"]
 
 
+def test_cli_rh_run_dispatches_single_pass_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M1 (review): `rh-run` shares `rh.run_planning`, so a config alone
+    # switches modes. A `planning_mode: single_pass` config must run the
+    # single-pass path, with the config passed through unchanged (no forced
+    # mode; that stays `single-pass-run`'s job).
+    captured: list[RHRunConfig] = []
+    monkeypatch.setattr(
+        single_pass,
+        "run_single_pass",
+        lambda config, verbose=False: (
+            captured.append(config) or _stub_result(config.run_id, "single_pass")
+        ),
+    )
+    config_path = tmp_path / "rh-single-pass.yaml"
+    config_path.write_text(
+        "run_id: cli-rh-single-pass\n"
+        f"stands_path: {tmp_path / 'stands.parquet'}\n"
+        f"yields_path: {tmp_path / 'yields.csv'}\n"
+        f"bridge_path: {tmp_path / 'bridge'}\n"
+        "horizon: 3\n"
+        "steps: 1\n"
+        "planning_mode: single_pass\n"
+        f"output_root: {tmp_path / 'out'}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["rh-run", str(config_path)])
+
+    assert result.exit_code == 0, result.stdout
+    assert captured[0].planning_mode == "single_pass"
+    assert "Single-pass run complete" in result.stdout
+
+
+def test_cli_rh_run_rolling_horizon_config_uses_run_rh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A rolling-horizon config keeps its pre-Phase 8 behaviour: `rh-run`
+    # routes through the shared dispatcher to `rh.run_rh` unchanged.
+    captured: list[RHRunConfig] = []
+    monkeypatch.setattr(
+        rh,
+        "run_rh",
+        lambda config, verbose=False: (
+            captured.append(config) or _stub_result(config.run_id, "rolling_horizon")
+        ),
+    )
+    config_path = tmp_path / "rh.yaml"
+    config_path.write_text(
+        "run_id: cli-rh\n"
+        f"stands_path: {tmp_path / 'stands.parquet'}\n"
+        f"yields_path: {tmp_path / 'yields.csv'}\n"
+        f"bridge_path: {tmp_path / 'bridge'}\n"
+        "horizon: 3\n"
+        "steps: 1\n"
+        f"output_root: {tmp_path / 'out'}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["rh-run", str(config_path)])
+
+    assert result.exit_code == 0, result.stdout
+    assert captured[0].planning_mode == "rolling_horizon"
+    assert "Rolling-horizon run complete" in result.stdout
+
+
 # --- oracle: single pass with steps=1 reproduces the RH step-1 record -------
 
 

@@ -197,17 +197,25 @@ def agent_run(
 def rh_run(
     config_path: Annotated[
         Path,
-        typer.Argument(help="Path to a rolling-horizon run YAML or JSON config."),
+        typer.Argument(
+            help="Path to a rolling-horizon or single-pass run YAML or JSON config."
+        ),
     ],
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit deterministic JSON output."),
     ] = False,
 ) -> None:
-    """Run the rolling-horizon principal-agent coordination loop."""
+    """Run the coupled pipeline selected by the config's ``planning_mode``.
+
+    ``rolling_horizon`` (the default) re-plans the WS3/principal/agent loop
+    every step; ``single_pass`` runs the whole-run baseline through the same
+    :func:`fresh_salvage.rh.run_planning` dispatcher (planning section 4), so
+    a config alone switches modes.
+    """
     try:
         config = RHRunConfig.read(config_path)
-        result = rh.run_rh(config)
+        result = rh.run_planning(config)
     except Exception as exc:
         diagnostic = Diagnostic(
             severity="error",
@@ -220,7 +228,10 @@ def rh_run(
         )
         _print_failure(diagnostic, json_output, command="rh-run")
         raise typer.Exit(code=1)
-    _print_rh_summary(result, json_output)
+    if result.planning_mode == "single_pass":
+        _print_single_pass_summary(result, json_output, command="rh-run")
+    else:
+        _print_rh_summary(result, json_output)
 
 
 @app.command(name="single-pass-run")
@@ -538,11 +549,18 @@ def _print_rh_summary(result: RHResult, json_output: bool) -> None:
     console.print(f"  {result.manifest_path}")
 
 
-def _print_single_pass_summary(result: RHResult, json_output: bool) -> None:
-    """Print the single-pass run summary as JSON or a Rich report."""
+def _print_single_pass_summary(
+    result: RHResult, json_output: bool, command: str = "single-pass-run"
+) -> None:
+    """Print the single-pass run summary as JSON or a Rich report.
+
+    ``command`` names the invoking CLI command in the JSON payload, because
+    both ``single-pass-run`` and an ``rh-run`` invocation with a
+    ``planning_mode: single_pass`` config reach this printer.
+    """
 
     if json_output:
-        payload = {"ok": True, "command": "single-pass-run", **result.summary()}
+        payload = {"ok": True, "command": command, **result.summary()}
         console.out(json.dumps(payload, indent=2, sort_keys=True))
         return
 
