@@ -295,7 +295,9 @@ Parent issue: #40
 
 Branch: `feature/p9-ws4-backend`
 
-Status: active (spike; feasibility brief complete; P9.1/P9.2 pending)
+Status: active (spike; P9.1/P9.2 evidence recorded — see
+`planning/phase9-ws4-scale-test-results.md`; checkpoint held on #40; next
+decision P9.3 and/or P9.5)
 
 Goal: evaluate whether WS4 (https://github.com/UBC-FRESH/ws4) can replace the
 WS3 wood-supply backend — and possibly the custom principal/agent HiGHS LPs —
@@ -310,8 +312,8 @@ corrections: a dataset build step remains; capability superset does not imply
 semantic parity; spatial features are inert on TSA29 until topology/roads
 data exist): `planning/phase9-ws4-assessment.md`.
 
-- [ ] P9.1 WS4 intake and API smoke (#41).
-- [ ] P9.2 Schedule-only bridge proof of concept (#42).
+- [x] P9.1 WS4 intake and API smoke (#41).
+- [x] P9.2 Schedule-only bridge proof of concept (#42).
 - [ ] P9.3 Coupled subsidy-scan experiment (#43).
 - [ ] P9.4 Evaluation and decision gate (#44).
 - [ ] P9.5 Topology and roads data assessment for TSA29 (#45).
@@ -327,6 +329,17 @@ continue/kill/defer before P9.3/P9.4; path (b) is out of contract (AGENTS.md
 linear-pipeline rule) without a maintainer-approved amendment. See
 `planning/phase9-ws4-assessment.md`, sections 5-8.
 
+Checkpoint record (2026-10-19): P9.1/P9.2 closed (#41, #42) with the
+full-TSA29 aspatial scale test — ingest/validate clean at 646,031
+fragment-portions / 421,945 blocks; 15.4 M candidate chains measured (the
+~27.7 M estimate did not hold); a 100-yr WS3-mirror search reaches 9/10
+per-decade floors (p1 at 96.8%; terminal liquidation 100.0% of the WS3
+level) in ~30 min single-core / 3.56 GB peak (~181 s per decade-step vs the
+WS3 rolling step's ~11 s). Scale and level both pass; the scale and
+level-reachability kill criteria are **not triggered**. Evidence:
+`planning/phase9-ws4-scale-test-results.md`. Next decision point: P9.3
+(coupled subsidy scan) and/or P9.5 (topology and roads); P9.4 stays gated.
+
 ## Current Next Steps
 
 The Grade Transition work is tracked in parent issue #18, with principal child
@@ -337,9 +350,11 @@ in issue #28.
 Phase 8 (single-pass planning baseline, parent issue #33) is complete and
 merged to `main` via PR #46 (merge commit `dd26448`; parent issue #33
 closed); see the Phase 8 section above. The deferred P8 review minors
-(m1, m4, m5, m7) remain open as backlog, and the next roadmap item is the
+(m1, m4, m5, m7) remain open as backlog, and the active roadmap item is the
 decision-gated Phase 9 WS4 backend spike (parent issue #40,
-`feature/p9-ws4-backend`).
+`feature/p9-ws4-backend`): its P9.1/P9.2 checkpoint is reached (scale and
+level both pass; `planning/phase9-ws4-scale-test-results.md`), and the next
+decision point is P9.3 and/or P9.5.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity

@@ -1,9 +1,10 @@
 # Phase 9 WS4 Backend Spike (Seed)
 
-Status: seed — scoping refined after the feasibility brief (findings pending
-P9.1-P9.4 evidence)
+Status: scoping note — P9.1/P9.2 evidence recorded
+(`planning/phase9-ws4-scale-test-results.md`); checkpoint held on #40;
+P9.3–P9.5 open
 
-Date: 2026-10-18
+Date: 2026-10-18 (findings update 2026-10-19)
 
 > **Seed version.** This note scopes the Phase 9 spike. The kickoff framing
 > has been refined from the WS4 feasibility review, whose condensed record is
@@ -11,8 +12,10 @@ Date: 2026-10-18
 > build step remains; capability superset does not imply semantic parity;
 > spatial features are inert on TSA29 until topology/roads data exist) are
 > carried into the task scoping below. Statements about WS4 capabilities
-> remain hypotheses until P9.1-P9.4 record observed-run evidence. Do not cite
-> numbers from this note in the thesis or any publication.
+> remain hypotheses until P9.1-P9.4 record observed-run evidence — P9.1/P9.2
+> have now recorded the aspatial runs; see
+> `planning/phase9-ws4-scale-test-results.md`. Do not cite numbers from this
+> note in the thesis or any publication.
 
 ## Purpose
 
@@ -115,6 +118,13 @@ answer. If either question fails, close the phase with the evidence rather
 than proceeding; defer is the default outcome for merely incomplete
 evidence. Full detail and kill criteria: `planning/phase9-ws4-assessment.md`.
 
+**Status (2026-10-19): executed.** P9.1/P9.2 ran in a clean-room spike; the
+checkpoint is held on #40 and both questions pass on the aspatial surface
+(scale: ~30 min single-core per full 100-yr mirror, 3.56 GB peak; level:
+9/10 WS3 floors, p1 at 96.8%, terminal liquidation 100.0%). The next
+decision point is P9.3 and/or P9.5; the 2903xxx coverage question and the
+crosswalk audit are answered in `planning/phase9-ws4-scale-test-results.md`.
+
 ## Known constraints and risks
 
 - Current thesis numbers are WS3-based; a swap invalidates comparability
@@ -127,12 +137,15 @@ evidence. Full detail and kill criteria: `planning/phase9-ws4-assessment.md`.
 - Hidden WS3-specific assumptions in fresh-salvage's couplings: per-cohort
   ceilings, schedule entity mapping, even-flow/AAC handling, period
   semantics.
-- **Scale and candidates.** ~421,945 blocks and an estimated ~27.7M
-  candidate chains at TSA29 scale; nothing has been measured at that scale
-  (WS4's benchmark sample is 16,174 fragments / 3,183 blocks).
+- **Scale and candidates.** ~421,945 blocks. The ~27.7M candidate-chain
+  estimate was **corrected by measurement to 15.4M chains** (17.7 s /
+  2.29 GB enumeration on the full estate; WS4's benchmark sample is 16,174
+  fragments / 3,183 blocks). See the results note.
 - **Soft constraints.** WS4 cannot express hard constraints: even-flow and
   level bands are weighted penalties, so "reaching the level" is an outcome
-  to be measured, not a guarantee.
+  to be measured, not a guarantee. P9.2 measured it: the level is reached
+  aspatial (9/10 floors; residual closable at the recorded tail rate) —
+  still an outcome, not a guarantee.
 - **Patch-criterion gap.** A patch criterion can only be a feature in WS4,
   so 28 of the reference's 63 patch targets run and silently produce all-zero
   cells (WS4's own backlog). Do not treat patch targets as usable evidence.
@@ -144,7 +157,16 @@ evidence. Full detail and kill criteria: `planning/phase9-ws4-assessment.md`.
   or rounding") and cannot start without an explicit maintainer-approved
   contract amendment.
 
-## Findings (to be completed)
+## Findings
+
+**P9.1/P9.2 evidence recorded (2026-10-19).** The aspatial full-estate scale
+test answers both checkpoint killer questions — scale and level both pass —
+with the measured record in `planning/phase9-ws4-scale-test-results.md`
+(environment, ingest/validate, simulate, candidates 15.4 M measured vs
+~27.7 M estimated, optimizer runs, the WS3-mirror level results, cleared
+kill criteria, and the portability gotchas). Task issues #41 and #42 are
+closed; #40 holds the checkpoint. P9.3–P9.5 remain open; the next decision
+point is P9.3 and/or P9.5.
 
 Feasibility-brief summary (full detail:
 `planning/phase9-ws4-assessment.md`):
@@ -154,18 +176,22 @@ Feasibility-brief summary (full detail:
   goal-programming search over soft targets (SA/tabu/ILS), not an LP:
   no optimality guarantee, no hard constraints, annual simulation with
   `period_width` accounting, block-named schedules.
-- **TSA29 plumbing is promising but unproven.** Both ingest formats exist
-  (legacy matrix and ForestModelXML plus fragments). The crosswalk exactness
-  (including the split-block track rule and the 2903xxx AU coverage
-  question) is the top unknown; topology is empty; there are no road/mill
-  tables or rates, so the spatial features that motivate WS4 are inert on
-  TSA29 today. P9.5 scopes whether that data can be built.
+- **TSA29 plumbing is now proven at the aspatial surface.** Both ingest
+  formats exist (legacy matrix and ForestModelXML plus fragments); the
+  legacy matrix + portions-based fragments path ingests at full estate with
+  `ws4 validate` clean, and the crosswalk (including the split-block portion
+  rule and the 2903xxx AU coverage) is audited exact — see the results note.
+  Topology is still empty and there are no road/mill tables or rates, so the
+  spatial features that motivate WS4 remain inert on TSA29 until P9.5
+  settles whether that data can be built.
 - **Parity gaps to watch** (WS4's own backlog): the all-zero
   product-criterion patch targets and the mill-destination policy
-  difference; both are measured, both are Phase 12 work, neither is closed.
-- **Recommendation: run P9.1 + P9.2 first (~4-6 person-days) and stop at
-  the checkpoint** if the level or scale questions fail; P9.3/P9.4 stay
-  gated, and path (b) stays out of contract until the maintainer decides.
+  difference; both are measured, both are Phase 12 work, neither is closed,
+  and neither was exercised in the aspatial test.
+- **Recommendation (unchanged in spirit)**: the checkpoint's level and scale
+  questions pass, so the phase continues to the next decision point —
+  P9.3 (coupled subsidy scan) and/or P9.5 (topology/roads) — before any
+  coupling; path (b) stays out of contract until the maintainer decides.
 
 The remaining findings — WS4 entry points actually exercised, TSA29 input
 coverage, schedule mapping, coupled-experiment outcome, capability matrix,
@@ -173,14 +199,26 @@ runtime comparison, per-path code impact, and the continue/kill/defer
 recommendation — are recorded from the P9.1-P9.4 evidence as those run:
 
 - WS4 entry points, config surface, and input formats actually exercised
-  (P9.1).
+  (P9.1): **recorded** — `planning/phase9-ws4-scale-test-results.md` (the
+  packaged synthetic example was exercised end-to-end through the Python
+  API; the CLI `ingest`/`validate` paths were exercised on TSA29 at full
+  estate).
 - TSA29 input coverage: what fed the smoke run, what was missing, and what
-  was stubbed rather than fabricated.
-- Schedule mapping evidence and gaps (P9.2).
+  was stubbed rather than fabricated: **recorded** — the legacy matrix plus
+  a portions-based fragments file fed every run; the spatial layers
+  (topology, roads, mills) were absent and **nothing was stubbed or
+  fabricated**; P9.5 owns whether they can be built.
+- Schedule mapping evidence and gaps (P9.2): **recorded at the account
+  level** — the WS3 volume quantity is like-for-like with the WS4 product
+  account, and level/scale are answered. The block→cohort entity mapping
+  and the per-cohort ceiling listener were not built: they are only
+  required once a coupling path is selected and move to P9.3 scoping.
 - Coupled-experiment outcome and comparison against the ws3+LP pipeline
-  (P9.3).
+  (P9.3): **open**.
 - Capability matrix, runtime comparison, per-path code-impact estimate, and
-  the continue/kill/defer recommendation with rationale (P9.4).
+  the continue/kill/defer recommendation with rationale (P9.4): **open**
+  (gated on the next decision point; the checkpoint so far records the
+  aspatial level/scale half).
 
 ## References
 
