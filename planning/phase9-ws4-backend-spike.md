@@ -1,10 +1,11 @@
 # Phase 9 WS4 Backend Spike (Seed)
 
-Status: scoping note — P9.1/P9.2 evidence recorded
-(`planning/phase9-ws4-scale-test-results.md`); checkpoint held on #40;
-P9.3–P9.5 open
+Status: **CLOSED — decision gate outcome: NO-GO for this project (keep
+WS3), 2026-10-19.** P9.1/P9.2 evidence recorded
+(`planning/phase9-ws4-scale-test-results.md`); P9.3 not pursued; P9.4
+decision recorded below; P9.5 deferred (future lab work).
 
-Date: 2026-10-18 (findings update 2026-10-19)
+Date: 2026-10-18 (findings update 2026-10-19; decision recorded 2026-10-19)
 
 > **Seed version.** This note scopes the Phase 9 spike. The kickoff framing
 > has been refined from the WS4 feasibility review, whose condensed record is
@@ -16,6 +17,47 @@ Date: 2026-10-18 (findings update 2026-10-19)
 > have now recorded the aspatial runs; see
 > `planning/phase9-ws4-scale-test-results.md`. Do not cite numbers from this
 > note in the thesis or any publication.
+
+## Decision (2026-10-19): NO-GO for this project — keep WS3
+
+The P9.4 decision gate (#44) closed as **no-go for adopting WS4 in this
+project**: the project keeps the WS3-based pipeline (rolling-horizon and
+single-pass; the Phase 8 results) as its results pipeline. The WS4 swap is
+not adopted here.
+
+Rationale:
+
+- **Cost, and heuristic where WS3 is exact.** A full 100-yr aspatial mirror
+  run costs ~30 min single-core (~181 s per decade-step) — ~16x the WS3
+  rolling step's ~11 s and ~30x the single-pass pipeline (~30 min vs
+  62 s/193 s as measured). WS4 is a seeded metaheuristic search ("good
+  schedules, not optimal ones", soft bands, inert `--time-limit`) where WS3
+  is an exact LP solve — more search time without a project capability that
+  justifies it.
+- **The spatial value — WS4's only real differentiator — is blocked.**
+  Patch targets, road routing, and mill destinations are inert on TSA29:
+  the topology table is header-only, and there are no route/mill tables or
+  rates. P9.5 (topology/roads assessment) was deferred rather than run, so
+  the spatial half is not just unmeasured — it is blocked on data that does
+  not exist.
+- **Pipeline stability.** The project's results pipeline (thesis numbers,
+  Phase 8 single-pass and RH evidence) stays on WS3; a WS4 swap would
+  invalidate comparability without an offsetting measurable gain.
+
+What could reopen the decision:
+
+- Spatial datasets built for TSA29 (adjacency topology, road network with
+  mill destinations and rates — the P9.5 scope), turning the spatial
+  features from inert to testable; and
+- Parallel-scaling evidence bringing WS4 runs within the project budget
+  (multi-island / multi-process scaling; untested here at one worker).
+
+WS4 remains a **lab-level candidate**: the clean-room clone and the
+measured evidence (`planning/phase9-ws4-scale-test-results.md`) are
+retained for future lab work, and nothing WS4-related is vendored in this
+repository. Companion records: `planning/phase9-ws4-assessment.md`
+(feasibility), `planning/phase9-ws4-scale-test-results.md` (evidence),
+`ROADMAP.md` ("Phase 9", closed), and `CHANGE_LOG.md`.
 
 ## Purpose
 

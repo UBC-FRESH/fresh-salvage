@@ -5,6 +5,22 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 9 closed **NO-GO** on the WS4 backend swap (2026-10-19; decision
+  gate P9.4, #44; parent issue #40): the project keeps WS3 as its results
+  pipeline. Rationale: the aspatial WS4 step is ~16x the WS3 per-decade
+  step and ~30x the single-pass pipeline (~30 min vs 62 s/193 s) and
+  heuristic where WS3 is exact; WS4's spatial differentiator (patch
+  targets, roads, mills) is blocked on non-existent topology/roads/mill
+  data; and the project's results pipeline (thesis numbers, Phase 8
+  evidence) stays on WS3. P9.3 (#43) closed as not planned; P9.5 (#45)
+  closed as deferred (future lab work if WS4 adoption is revisited);
+  P9.1/P9.2 evidence retained
+  (`planning/phase9-ws4-scale-test-results.md`). What could reopen it:
+  spatial datasets built for TSA29, and parallel-scaling evidence bringing
+  WS4 within budget; WS4 remains a lab-level candidate (clone and
+  clean-room evidence retained). Docs-only change: a decision section in
+  `planning/phase9-ws4-backend-spike.md`, the assessment and scale-test
+  status lines updated, and `ROADMAP.md` marks the phase closed.
 - Phase 9 aspatial scale test complete on the full TSA29 estate (P9.1/P9.2
   evidence; issues #41 and #42 closed, checkpoint held on #40). Clean-room
   spike (untracked workspace; WS4 `0.1.0` installed editable from a copy of

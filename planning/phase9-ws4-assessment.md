@@ -1,8 +1,9 @@
 # Phase 9 WS4 Feasibility Assessment
 
 Status: assessment complete; P9.1/P9.2 measured evidence recorded (aspatial
-scale test — see `planning/phase9-ws4-scale-test-results.md`); checkpoint
-held on #40; P9.3–P9.5 open
+scale test — see `planning/phase9-ws4-scale-test-results.md`); **decision
+recorded 2026-10-19: NO-GO for this project (keep WS3)** — see the Decision
+section of `planning/phase9-ws4-backend-spike.md`
 
 Date: 2026-10-18 (measured-results section added 2026-10-19)
 

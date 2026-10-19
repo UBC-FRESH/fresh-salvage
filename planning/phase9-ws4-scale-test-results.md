@@ -1,7 +1,8 @@
 # Phase 9 WS4 Aspatial Scale Test — Measured Results
 
 Status: evidence recorded — P9.1/P9.2 complete (issues #41, #42 closed);
-aspatial checkpoint held on #40; P9.3–P9.5 open.
+**evidence for the 2026-10-19 no-go decision** (keep WS3 — see the Decision
+section of `planning/phase9-ws4-backend-spike.md`).
 
 Date: 2026-10-19
 

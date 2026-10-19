@@ -18,7 +18,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
 | P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Complete (P8.1-P8.6; merged via PR #46; #33 closed) |
-| P9 WS4 backend spike (decision-gated backend replacement evaluation) | #40 | `feature/p9-ws4-backend` | Active (spike; decision gate) |
+| P9 WS4 backend spike (decision-gated backend replacement evaluation) | #40 | `feature/p9-ws4-backend` | Closed — NO-GO (keep WS3; 2026-10-19) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -295,9 +295,11 @@ Parent issue: #40
 
 Branch: `feature/p9-ws4-backend`
 
-Status: active (spike; P9.1/P9.2 evidence recorded — see
-`planning/phase9-ws4-scale-test-results.md`; checkpoint held on #40; next
-decision P9.3 and/or P9.5)
+Status: closed (2026-10-19) — decision gate outcome: **NO-GO for this
+project (keep WS3)**. P9.1/P9.2 complete (#41, #42); P9.3 (#43) not
+pursued; P9.4 (#44) decision recorded; P9.5 (#45) deferred. Evidence:
+`planning/phase9-ws4-scale-test-results.md`; decision record:
+`planning/phase9-ws4-backend-spike.md` ("Decision (2026-10-19)").
 
 Goal: evaluate whether WS4 (https://github.com/UBC-FRESH/ws4) can replace the
 WS3 wood-supply backend — and possibly the custom principal/agent HiGHS LPs —
@@ -314,9 +316,12 @@ data exist): `planning/phase9-ws4-assessment.md`.
 
 - [x] P9.1 WS4 intake and API smoke (#41).
 - [x] P9.2 Schedule-only bridge proof of concept (#42).
-- [ ] P9.3 Coupled subsidy-scan experiment (#43).
-- [ ] P9.4 Evaluation and decision gate (#44).
-- [ ] P9.5 Topology and roads data assessment for TSA29 (#45).
+- [x] P9.3 Coupled subsidy-scan experiment (#43) — closed, not pursued
+      (no-go decision).
+- [x] P9.4 Evaluation and decision gate (#44) — closed; outcome: **NO-GO
+      for this project (keep WS3)**.
+- [x] P9.5 Topology and roads data assessment for TSA29 (#45) — closed,
+      deferred (future lab work if WS4 adoption is revisited).
 
 Gate criteria (continue only if): WS4 ingests TSA29-comparable inputs and
 yields usable schedules; performance is competitive with the current stack; a
@@ -337,8 +342,18 @@ per-decade floors (p1 at 96.8%; terminal liquidation 100.0% of the WS3
 level) in ~30 min single-core / 3.56 GB peak (~181 s per decade-step vs the
 WS3 rolling step's ~11 s). Scale and level both pass; the scale and
 level-reachability kill criteria are **not triggered**. Evidence:
-`planning/phase9-ws4-scale-test-results.md`. Next decision point: P9.3
-(coupled subsidy scan) and/or P9.5 (topology and roads); P9.4 stays gated.
+`planning/phase9-ws4-scale-test-results.md`.
+
+Decision record (2026-10-19): the gate closed **NO-GO for this project —
+keep WS3**. The WS4 swap is not adopted: the aspatial step is ~16x the WS3
+per-decade step and ~30x the single-pass pipeline (~30 min vs 62 s/193 s)
+and heuristic where WS3 is exact; WS4's spatial differentiator is blocked on
+non-existent topology/roads/mill data (P9.5 deferred); and the project's
+results pipeline stays on WS3. The decision could be revisited if the
+spatial datasets are built (P9.5 scope) and parallel-scaling evidence
+brings WS4 runs within budget; WS4 remains a lab-level candidate (clone
+and clean-room evidence retained). Full record:
+`planning/phase9-ws4-backend-spike.md`, "Decision (2026-10-19)".
 
 ## Current Next Steps
 
@@ -350,11 +365,12 @@ in issue #28.
 Phase 8 (single-pass planning baseline, parent issue #33) is complete and
 merged to `main` via PR #46 (merge commit `dd26448`; parent issue #33
 closed); see the Phase 8 section above. The deferred P8 review minors
-(m1, m4, m5, m7) remain open as backlog, and the active roadmap item is the
-decision-gated Phase 9 WS4 backend spike (parent issue #40,
-`feature/p9-ws4-backend`): its P9.1/P9.2 checkpoint is reached (scale and
-level both pass; `planning/phase9-ws4-scale-test-results.md`), and the next
-decision point is P9.3 and/or P9.5.
+(m1, m4, m5, m7) remain open as backlog. Phase 9 (WS4 backend spike,
+parent issue #40, `feature/p9-ws4-backend`) is closed with a **NO-GO**
+decision (2026-10-19) after the P9.1/P9.2 aspatial checkpoint: the
+WS3-based pipeline stays the project's results pipeline; see the Phase 9
+section above and `planning/phase9-ws4-backend-spike.md`. No active
+feature branch remains for this work.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity
