@@ -43,8 +43,8 @@ base:
 binary_search:
   axis: subsidy_rate_per_m3
   lower: 20.0
-  upper: 30.0
-  iterations: 8
+  upper: 40.0
+  iterations: 10
   tolerance: 0.1
   threshold: 0.0
   metric: total_burned_harvest_m3
