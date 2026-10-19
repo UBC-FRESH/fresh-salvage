@@ -85,6 +85,19 @@ step re-solves WS3 from the current cohort state, splits the period-1
 decadal harvest into 10 annual per-cohort ceilings, solves the principal and
 agent LPs, and replays the implemented years with fire dynamics.
 
+For the single-pass baseline — one t=0 solve over the same 100 years, with
+no mid-horizon re-planning — set ``planning_mode: single_pass`` (or just use
+the shipped example, which already does) and run:
+
+.. code-block:: bash
+
+   fresh-salvage single-pass-run examples/single_pass_tsa29.yaml --json
+
+The two modes share the decade-record, final-state, and manifest schemas,
+so their outputs are directly comparable; :doc:`model_semantics` records the
+comparability rules (decade-start versus base-year objectives, and why the
+WS3 objective is not cross-comparable).
+
 Step 4: Read The Outputs
 ------------------------
 
@@ -102,6 +115,11 @@ Artifacts land under the config's ``output_root`` in a stable layout
 - ``derived/rh_state/step_NN.are`` — the canonical cohort state injected
   into WS3 at each step.
 - ``manifests/<run>-rh-manifest.json`` — the run manifest.
+
+A single-pass run writes the same decade-record, final-state, and manifest
+files, but with one run-level schedule (``data/<run>-schedule.csv``) and one
+run-level offers/decisions pair over all ``steps * period_length`` years;
+see :doc:`cli` for its artifact list.
 
 Reading The Manifest Provenance
 -------------------------------
@@ -133,9 +151,12 @@ Next Steps
 ----------
 
 - :doc:`model_semantics` for how the WS3 input files are built, the fire
-  and inventory equations the LPs implement, and the known limitations
-  you should read before trusting any number.
+  and inventory equations the LPs implement, the single-pass planning mode,
+  and the known limitations you should read before trusting any number.
 - :doc:`cli` for every command, flag, config field, and artifact.
+- ``examples/rh_tsa29.yaml`` and ``examples/single_pass_tsa29.yaml`` for the
+  paired 100-year runs; :doc:`ensembles` shows both modes as one
+  ``planning_mode`` grid axis.
 - ``examples/ensemble_tsa29.yaml`` for a 4-scenario parallel smoke grid, and
   :doc:`ensembles` for scenario sweeps such as the subsidy flip-point curve
   (``examples/ensemble_flip_sweep.yaml``).

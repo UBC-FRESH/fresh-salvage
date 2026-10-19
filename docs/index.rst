@@ -22,7 +22,9 @@ come from the femic TSA29 wood-supply package, where 246,957 ingested
 inventory stands aggregate to 1,608 decision cohorts. An annual fire
 simulation driven by mean fire return intervals (MFRI) runs in a
 rolling-horizon loop around the LPs: each decade is planned from the
-inventory the previous decade left behind. A process-pool driver runs
+inventory the previous decade left behind. A single-pass baseline solves
+the same coupled pipeline once at t=0 over the full 100-year horizon, which
+isolates what decadal re-planning changes. A process-pool driver runs
 whole scenario grids (ensembles) in parallel.
 
 The TSA29 case study is calibrated against the 2025 fire-season
@@ -64,13 +66,16 @@ The Five-Layer Pipeline
    discounted net present value (3%/yr) under annual fire dynamics:
    harvest -> fire -> salvage -> decay, with salvage feasible only
    against the burned inventory on hand.
-5. **Rolling horizon and ensembles** (``fresh_salvage.rh``,
-   ``fresh_salvage.ensemble``) — 10 decadal steps (100 implemented
-   years) of 15-period WS3 re-solves with in-memory inventory
-   injection, principal and agent coupling, fire replay, and
-   area-conserving cohort transitions; the ensemble driver maps a
-   scenario grid (the cross-product of named config fields) onto a
-   spawn-based process pool with per-scenario failure isolation.
+5. **Rolling horizon, single pass, and ensembles** (``fresh_salvage.rh``,
+   ``fresh_salvage.single_pass``, ``fresh_salvage.ensemble``) — 10 decadal
+   steps (100 implemented years) of 15-period WS3 re-solves with in-memory
+   inventory injection, principal and agent coupling, fire replay, and
+   area-conserving cohort transitions; a single-pass baseline
+   (``planning_mode: single_pass``) solves the same pipeline once at t=0
+   over all 100 years — one WS3 solve, one LP pair, one lineage replay — as
+   the re-planning comparison; the ensemble driver maps a scenario grid (the
+   cross-product of named config fields) onto a spawn-based process pool
+   with per-scenario failure isolation.
 
 Documentation Map
 -----------------
@@ -85,11 +90,13 @@ Documentation Map
        femic source dependencies) and verify it?
    * - :doc:`quickstart`
      - How do I go from a clean checkout to a first 100-year
-       rolling-horizon result, and where do the outputs land?
+       rolling-horizon result (or the single-pass baseline), and where do
+       the outputs land?
    * - :doc:`model_semantics`
      - What exactly does the model compute — stratification, how the WS3
        input files are built, fire dynamics, both LP formulations, the
-       rolling-horizon loop, economics, and known limitations?
+       rolling-horizon loop, the single-pass planning mode, economics, and
+       known limitations?
    * - :doc:`cli`
      - What does each command read, write, and exit with? Full config field
        reference.

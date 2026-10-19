@@ -128,6 +128,13 @@ Recorded on the reference 64-core host:
 The WS3 horizon policy set at Phase 2.5: 15 periods for development, 20 for
 production; 30 validated.
 
+Phase 8 adds the single-pass planning baseline (``single-pass-run``); its
+100-year paired evidence — timings, decade records, and the
+RH-versus-single-pass findings — is recorded in
+``planning/phase8-single-pass-baseline.md`` (section P8.5), not in this
+Phase 6 validation record. The rolling-horizon results above are unchanged
+by Phase 8.
+
 The Subsidy Flip Curve
 ----------------------
 

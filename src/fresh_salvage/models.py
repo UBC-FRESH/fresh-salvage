@@ -20,6 +20,14 @@ MANIFEST_VERSION = "1.0"
 
 ARTIFACT_DIRECTORIES = ("data", "manifests", "logs", "reports")
 
+# Age WS3 assigns to clear-cut area: the bridge declares ``*ACTION cc Y`` with
+# no ``_AGE`` transition override, so ``ws3.forest.resolve_targetage`` returns
+# 0 and regenerated stands sit on the ``0 (mod period_length)`` age lattice.
+# The constant lives in this module (the config boundary) so
+# :class:`RHRunConfig` can express the lattice preconditions without importing
+# the rolling-horizon engine; ``fresh_salvage.rh`` imports it back.
+WS3_HARVEST_RESET_AGE = 0
+
 
 class Diagnostic(BaseModel):
     """A structured pipeline diagnostic (house evidence style)."""
@@ -614,7 +622,13 @@ class PrincipalManifest(BaseModel):
 
 
 class PrincipalResult(BaseModel):
-    """Typed result of one principal-LP solve."""
+    """Typed result of one principal-LP solve.
+
+    ``decadal_objective_values`` decomposes the objective per decade of
+    ``period_length`` years (including the constant offset), re-based to each
+    decade start; it is filled only when the solve is given the single-pass
+    decade switches (``period_length``) and empty otherwise.
+    """
 
     run_id: str
     status: str
@@ -623,6 +637,7 @@ class PrincipalResult(BaseModel):
     objective_value: float
     offers: list[PrincipalOfferRecord] = Field(default_factory=list)
     per_year_volumes: list[PrincipalYearVolumes] = Field(default_factory=list)
+    decadal_objective_values: list[float] = Field(default_factory=list)
     offered_cohort_years: int = Field(ge=0)
     lp_rows: int = Field(default=0, ge=0)
     lp_columns: int = Field(default=0, ge=0)
@@ -801,7 +816,13 @@ class AgentManifest(BaseModel):
 
 
 class AgentResult(BaseModel):
-    """Typed result of one agent-LP solve."""
+    """Typed result of one agent-LP solve.
+
+    ``decadal_objective_values`` decomposes the objective per decade of
+    ``period_length`` years, re-based to each decade start by
+    ``(1 + r) ** (L * k)`` (D7); it is filled only when the solve is given the
+    single-pass decade switches and empty otherwise.
+    """
 
     run_id: str
     status: str
@@ -810,6 +831,7 @@ class AgentResult(BaseModel):
     objective_value: float
     decisions: list[AgentDecisionRecord] = Field(default_factory=list)
     per_year_volumes: list[AgentYearVolumes] = Field(default_factory=list)
+    decadal_objective_values: list[float] = Field(default_factory=list)
     active_cohort_years: int = Field(ge=0)
     lp_rows: int = Field(default=0, ge=0)
     lp_columns: int = Field(default=0, ge=0)
@@ -1010,6 +1032,16 @@ class RHRunConfig(BaseModel):
     (1.0 = the MFRI table as published; 0.0 = a fire-free counterfactual);
     it is the ensemble axis for future-fire-pattern assumptions.
 
+    ``planning_mode`` selects the coupled planning pipeline: ``"rolling_horizon"``
+    (the default; :func:`fresh_salvage.rh.run_rh` re-plans every decade) or
+    ``"single_pass"`` (:func:`fresh_salvage.single_pass.run_single_pass` solves
+    the whole run once at t=0). Single pass needs ``horizon >= steps`` (one
+    WS3 solve must cover every implemented period) and the multi-period
+    schedule-lineage age-lattice preconditions the P8.1 ceiling mapper
+    enforces. ``burned_stock_reset`` (single pass only) drops the burned
+    inventory at decade boundaries, mimicking the rolling-horizon boundary.
+    Both fields are flat, so either is a valid ensemble/sensitivity axis.
+
     The remaining economic surface (prices, harvest/transport costs,
     stumpage rates, burned price discount) is carried as FLAT fields —
     ``green_prices``, ``burned_price_discount``, ``green_harvest_cost``,
@@ -1031,6 +1063,8 @@ class RHRunConfig(BaseModel):
     horizon: int = 15
     period_length: int = 10
     steps: int = 10
+    planning_mode: Literal["rolling_horizon", "single_pass"] = "rolling_horizon"
+    burned_stock_reset: bool = False
     max_age: int = 999
     workers: int = 64
     age_smashing: AgeSmashing = Field(default_factory=AgeSmashing)
@@ -1151,6 +1185,44 @@ class RHRunConfig(BaseModel):
             raise ValueError("burn_rate_multiplier cannot be negative")
         return value
 
+    @model_validator(mode="after")
+    def _validate_planning_mode(self) -> RHRunConfig:
+        """Reject planning-mode combinations that cannot run (D1, P8.4).
+
+        The lattice preconditions mirror
+        :func:`fresh_salvage.rh._require_disjoint_age_lattices`, which checks
+        them again at the ceiling-mapper boundary; here they fail at parse
+        time with an actionable message.
+        """
+
+        if self.planning_mode == "rolling_horizon":
+            if self.burned_stock_reset:
+                raise ValueError(
+                    "burned_stock_reset only applies to planning_mode='single_pass'"
+                )
+            return self
+        if self.horizon < self.steps:
+            raise ValueError(
+                "planning_mode='single_pass' requires horizon >= steps: one WS3 "
+                f"solve must cover every implemented period (horizon={self.horizon}, "
+                f"steps={self.steps})"
+            )
+        smashing = self.age_smashing
+        if not (
+            smashing.enabled
+            and self.period_length % smashing.width == 0
+            and (smashing.midpoint - WS3_HARVEST_RESET_AGE) % smashing.width != 0
+        ):
+            raise ValueError(
+                "planning_mode='single_pass' requires the multi-period schedule "
+                "age lattices to be disjoint: age smashing enabled, period_length "
+                f"({self.period_length}) divisible by the smashing width "
+                f"({smashing.width}), and a midpoint ({smashing.midpoint}) off the "
+                f"WS3 regeneration residue ({WS3_HARVEST_RESET_AGE} mod "
+                f"{smashing.width}); see rh._require_disjoint_age_lattices"
+            )
+        return self
+
     def economics(self) -> Economics:
         """Assemble the flat economic fields into an ``Economics`` record."""
 
@@ -1186,18 +1258,31 @@ class RHRunConfig(BaseModel):
 
 
 class RHStepRecord(BaseModel):
-    """Typed record of one implemented rolling-horizon step (one JSONL line)."""
+    """Typed record of one implemented planning step (one JSONL line).
+
+    Rolling-horizon runs fill every field; single-pass runs emit one record per
+    decade from a single t=0 solve, so the WS3 fields are populated for decade 1
+    only (D8) and the objective fields carry the run's decade decompositions
+    (D7). ``*_objective_value`` is re-based to the decade start (directly
+    comparable with rolling-horizon records); ``*_objective_value_base_year``
+    re-bases the same coefficient sums to the run's base year — identical for
+    the undiscounted principal, divided by ``(1 + r) ** (L * k)`` for the
+    agent's NPV. Both base-year fields stay ``None`` in rolling-horizon runs,
+    whose per-step LPs already start at their own step.
+    """
 
     step: int = Field(ge=1)
     start_year: int
-    ws3_status: str
-    ws3_objective_value: float
-    ws3_build_seconds: float = Field(ge=0.0)
-    ws3_solve_seconds: float = Field(ge=0.0)
+    ws3_status: str | None = None
+    ws3_objective_value: float | None = None
+    ws3_build_seconds: float = Field(default=0.0, ge=0.0)
+    ws3_solve_seconds: float = Field(default=0.0, ge=0.0)
     principal_objective_value: float
-    principal_solve_seconds: float = Field(ge=0.0)
+    principal_objective_value_base_year: float | None = None
+    principal_solve_seconds: float = Field(default=0.0, ge=0.0)
     agent_objective_value: float
-    agent_solve_seconds: float = Field(ge=0.0)
+    agent_objective_value_base_year: float | None = None
+    agent_solve_seconds: float = Field(default=0.0, ge=0.0)
     annual_green_harvest_m3: list[float] = Field(default_factory=list)
     annual_burned_harvest_m3: list[float] = Field(default_factory=list)
     area_burned_ha: float = Field(ge=0.0)
@@ -1205,7 +1290,14 @@ class RHStepRecord(BaseModel):
 
 
 class RHManifest(BaseModel):
-    """Evidence manifest for one rolling-horizon coupled run."""
+    """Evidence manifest for one coupled planning run (either planning mode).
+
+    ``planning_mode`` records which engine produced the run (defaulted so
+    pre-Phase-8 manifests parse unchanged). ``total_principal_objective`` and
+    ``total_agent_objective_base_year`` are the run totals re-based to the base
+    year (D7): the rolling-horizon engine discounts each step's agent NPV back
+    to t=0, the single-pass engine's LP is already at t=0.
+    """
 
     manifest_version: str = MANIFEST_VERSION
     run_id: str
@@ -1215,6 +1307,7 @@ class RHManifest(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     status: str
+    planning_mode: Literal["rolling_horizon", "single_pass"] = "rolling_horizon"
     steps: int = Field(ge=1)
     horizon: int = Field(ge=1)
     period_length: int = Field(ge=1)
@@ -1222,6 +1315,8 @@ class RHManifest(BaseModel):
     total_green_harvest_m3: float = Field(ge=0.0)
     total_burned_harvest_m3: float = Field(ge=0.0)
     total_area_burned_ha: float = Field(ge=0.0)
+    total_principal_objective: float | None = None
+    total_agent_objective_base_year: float | None = None
     wall_seconds: float = Field(ge=0.0)
     source_sha256: dict[str, str] = Field(default_factory=dict)
     step_records: list[RHStepRecord] = Field(default_factory=list)
@@ -1244,10 +1339,11 @@ class RHManifest(BaseModel):
 
 
 class RHResult(BaseModel):
-    """Typed result of one rolling-horizon coupled run."""
+    """Typed result of one coupled planning run (either planning mode)."""
 
     run_id: str
     status: str
+    planning_mode: Literal["rolling_horizon", "single_pass"] = "rolling_horizon"
     steps: int = Field(ge=1)
     horizon: int = Field(ge=1)
     period_length: int = Field(ge=1)
@@ -1269,6 +1365,7 @@ class RHResult(BaseModel):
         return {
             "run_id": self.run_id,
             "status": self.status,
+            "planning_mode": self.planning_mode,
             "steps": self.steps,
             "horizon": self.horizon,
             "period_length": self.period_length,
@@ -1290,7 +1387,11 @@ class RHResult(BaseModel):
             "per_step": [
                 {
                     "step": record.step,
-                    "ws3_objective_value": round(record.ws3_objective_value, 2),
+                    "ws3_objective_value": (
+                        None
+                        if record.ws3_objective_value is None
+                        else round(record.ws3_objective_value, 2)
+                    ),
                     "principal_objective_value": round(record.principal_objective_value, 2),
                     "agent_objective_value": round(record.agent_objective_value, 2),
                     "wall_seconds": round(record.wall_seconds, 3),
@@ -1830,5 +1931,6 @@ __all__ = [
     "WS3Objective",
     "WS3Result",
     "WS3RunConfig",
+    "WS3_HARVEST_RESET_AGE",
     "safe_slug",
 ]

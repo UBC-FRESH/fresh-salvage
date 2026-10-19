@@ -94,6 +94,8 @@ import pandas as pd
 
 from fresh_salvage import agent, fire, principal, ws3
 from fresh_salvage.models import (
+    WS3_HARVEST_RESET_AGE,
+    AgeSmashing,
     ArtifactLayout,
     Economics,
     RHManifest,
@@ -106,6 +108,13 @@ from fresh_salvage.models import (
 
 AREA_CONSERVATION_REL_TOLERANCE = ws3.AREA_CONSERVATION_REL_TOLERANCE
 FRACTION_SNAP_TOLERANCE = 1e-9
+# ``WS3_HARVEST_RESET_AGE`` (age WS3 assigns to clear-cut area: the bridge
+# declares ``*ACTION cc Y`` and ws3 maps the ``Y`` flag to
+# ``Action.targetage = 0``, so regenerated stands sit on the
+# ``0 (mod period_length)`` age lattice in later periods) is imported from
+# ``models`` because ``RHRunConfig`` validates the lattice preconditions too;
+# it stays part of the P8.1 ceiling-mapper API via this module's ``__all__``.
+DTYPE_KEY_LENGTH = 5
 
 STATE_KEY_COLUMNS = ("tsa", "ifm", "au_id", "stratum_code", "curve_id", "age")
 COHORT_COLUMNS = (*STATE_KEY_COLUMNS, "area_ha")
@@ -435,6 +444,22 @@ def inject_cohort_table(model: object, state: pd.DataFrame) -> dict[str, object]
     return {"dtypes_with_area": len(grouped), "area_ha": injected_area_ha}
 
 
+def run_planning(config: RHRunConfig, verbose: bool = False) -> RHResult:
+    """Run one coupled planning pipeline selected by ``config.planning_mode``.
+
+    The single dispatch point for the CLI (``rh-run``), the ensemble driver,
+    and the sensitivity driver: ``"rolling_horizon"`` routes to :func:`run_rh`,
+    ``"single_pass"`` to :func:`fresh_salvage.single_pass.run_single_pass`.
+    ``single_pass`` is imported lazily because it imports this module.
+    """
+
+    if config.planning_mode == "single_pass":
+        from fresh_salvage import single_pass
+
+        return single_pass.run_single_pass(config, verbose=verbose)
+    return run_rh(config, verbose=verbose)
+
+
 def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
     """Run the rolling-horizon coupled loop and write artifacts + manifest.
 
@@ -442,7 +467,18 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
     failure wraps the underlying structured error with the step context.
     Completed per-step JSONL records are flushed to ``steps_path`` as they
     finish, so a failed run still leaves its partial trajectory on disk.
+    A config whose ``planning_mode`` is not ``"rolling_horizon"`` fails fast
+    (the artifacts would otherwise be mislabeled); the dispatcher
+    :func:`run_planning` routes every mode.
     """
+
+    if config.planning_mode != "rolling_horizon":
+        raise RHError(
+            "rh_planning_mode_invalid",
+            f"run_rh requires planning_mode='rolling_horizon', got "
+            f"{config.planning_mode!r}; use rh.run_planning (or single_pass.run_single_pass) "
+            "for single-pass runs",
+        )
 
     started_at = datetime.now(UTC)
     wall_started = time.monotonic()
@@ -540,6 +576,7 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
         started_at=started_at,
         completed_at=datetime.now(UTC),
         status=status,
+        planning_mode=config.planning_mode,
         steps=config.steps,
         horizon=config.horizon,
         period_length=config.period_length,
@@ -551,6 +588,12 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
             sum(record.annual_burned_harvest_m3) for record in step_records
         ),
         total_area_burned_ha=sum(record.area_burned_ha for record in step_records),
+        total_principal_objective=sum(
+            record.principal_objective_value for record in step_records
+        ),
+        total_agent_objective_base_year=_agent_objective_base_year(
+            step_records, config.period_length, config.discount_rate
+        ),
         wall_seconds=wall_seconds,
         source_sha256=_source_checksums(config, bridge),
         step_records=step_records,
@@ -561,6 +604,7 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
     return RHResult(
         run_id=config.run_id,
         status=status,
+        planning_mode=config.planning_mode,
         steps=config.steps,
         horizon=config.horizon,
         period_length=config.period_length,
@@ -578,6 +622,23 @@ def run_rh(config: RHRunConfig, verbose: bool = False) -> RHResult:
         steps_path=steps_path,
         final_state_path=final_state_path,
         manifest_path=manifest_path,
+    )
+
+
+def _agent_objective_base_year(
+    step_records: list[RHStepRecord], period_length: int, discount_rate: float
+) -> float:
+    """Re-base each recorded step's agent NPV to the run base year (D7).
+
+    Step ``k`` solves its window at the run's ``L*(k-1)``-years-later start, so
+    its reported NPV is multiplied by ``(1+r)**-(L*(k-1))``; the total is then
+    comparable with a single-pass LP objective, which discounts from t=0.
+    """
+
+    return sum(
+        record.agent_objective_value
+        * (1.0 + discount_rate) ** (-period_length * (record.step - 1))
+        for record in step_records
     )
 
 
@@ -687,7 +748,7 @@ def _run_step(
         pd.DataFrame(
             [decision.model_dump() for decision in agent_result.decisions]
         ).to_parquet(decisions_path, index=False)
-        harvests, salvages = _fraction_schedules(state, agent_result, config.period_length)
+        harvests, salvages = _fraction_schedules(state, agent_result)
         new_state, totals = advance_cohort_table(
             state,
             harvests=harvests,
@@ -758,15 +819,9 @@ def _period1_cohort_volumes(
     ]
     volumes: dict[str, float] = {}
     for row in harvest_rows.itertuples(index=False):
-        key = json.loads(row.dtype_key)
-        if len(key) != 5:
-            raise RHError(
-                "rh_schedule_dtype_malformed",
-                f"WS3 schedule dtype key is not a 5-element list: {row.dtype_key!r}",
-            )
-        _tsa, ifm, au_id, stratum_code, curve_id = (str(part) for part in key)
+        ifm, au_id, stratum_code, curve_id = _schedule_dtype_identity(row.dtype_key)
         cohort_id = cohort_record_id(
-            ifm, au_id, stratum_code, int(curve_id), int(row.age_class)
+            ifm, au_id, stratum_code, curve_id, int(row.age_class)
         )
         if cohort_id not in known_ids:
             raise RHError(
@@ -778,8 +833,188 @@ def _period1_cohort_volumes(
     return volumes
 
 
+def schedule_cohort_period_volumes(
+    schedule: pd.DataFrame,
+    action_code: str,
+    state: pd.DataFrame,
+    *,
+    implemented_periods: int,
+    period_length: int,
+    age_smashing: AgeSmashing,
+) -> dict[str, tuple[float, ...]]:
+    """Map WS3 harvest volume (m3) onto t=0 cohorts for every implemented period.
+
+    Returns one tuple of ``implemented_periods`` volumes per state cohort id,
+    in state row order (all zeros when WS3 never harvests the cohort). Only
+    positive-area rows of ``action_code`` in periods ``1..implemented_periods``
+    count; rows of one PR #32 dedup group sum back to the group total.
+
+    Lineage rule (verified against ws3 aging; see
+    ``planning/phase8-single-pass-baseline.md`` section 5.2): WS3 ages a
+    stand by exactly ``period_length`` per period without clamping, so a
+    period-``p`` row of age ``a`` on an untouched initial cohort comes from the
+    t=0 cohort of age ``a0 = a - period_length * (p - 1)``, which lies on the
+    age-smashing midpoint lattice. Clear-cut resets age to
+    ``WS3_HARVEST_RESET_AGE``, so regenerated stands sit on the
+    ``WS3_HARVEST_RESET_AGE (mod period_length)`` lattice. A harvest of a
+    regenerated stand fails fast with ``rh_schedule_regenerated_harvest``
+    (regenerated stands are not LP cohorts); a row on neither lattice fails
+    with ``rh_schedule_off_lattice`` and an initial-lineage row without a
+    state cohort with ``rh_schedule_unknown_cohort``.
+    """
+
+    if period_length <= 0:
+        raise RHError(
+            "rh_invalid_period_length",
+            f"period_length must be positive: {period_length}",
+        )
+    if implemented_periods <= 0:
+        raise RHError(
+            "rh_invalid_implemented_periods",
+            f"implemented_periods must be positive: {implemented_periods}",
+        )
+    _require_disjoint_age_lattices(period_length, age_smashing)
+    _require_state_on_midpoint_lattice(state, age_smashing)
+
+    volumes: dict[str, list[float]] = {
+        cohort_record_id(
+            row.ifm, row.au_id, row.stratum_code, int(row.curve_id), int(row.age)
+        ): [0.0] * implemented_periods
+        for row in state.itertuples(index=False)
+    }
+    harvest_rows = schedule[
+        (schedule["period"] <= implemented_periods)
+        & (schedule["harvest_action"] == action_code)
+        & (schedule["area_ha"] > 0.0)
+    ]
+    for row in harvest_rows.itertuples(index=False):
+        period = int(row.period)
+        age = int(row.age_class)
+        ifm, au_id, stratum_code, curve_id = _schedule_dtype_identity(row.dtype_key)
+        initial_age = age - period_length * (period - 1)
+        row_context = (
+            f"WS3 period-{period} {action_code!r} row for development type "
+            f"{row.dtype_key} at age {age}"
+        )
+        if not _is_initial_lineage_age(initial_age, age_smashing):
+            if _is_regenerated_age(age, period_length):
+                raise RHError(
+                    "rh_schedule_regenerated_harvest",
+                    f"{row_context} harvests a stand regenerated inside the "
+                    f"implemented periods (age on the {WS3_HARVEST_RESET_AGE} "
+                    f"mod {period_length} regeneration lattice); regenerated "
+                    "stands are not LP cohorts",
+                )
+            raise RHError(
+                "rh_schedule_off_lattice",
+                f"{row_context} lies on neither the initial-inventory midpoint "
+                f"lattice (implied t=0 age {initial_age}) nor the regeneration "
+                "lattice",
+            )
+        cohort_id = cohort_record_id(ifm, au_id, stratum_code, curve_id, initial_age)
+        period_volumes = volumes.get(cohort_id)
+        if period_volumes is None:
+            raise RHError(
+                "rh_schedule_unknown_cohort",
+                f"{row_context} maps to t=0 cohort {cohort_id!r}, which is absent "
+                "from the injected state table",
+            )
+        period_volumes[period - 1] += float(row.volume_m3)
+    return {cohort_id: tuple(values) for cohort_id, values in volumes.items()}
+
+
+def annual_ceiling_matrix(
+    period_volumes: dict[str, tuple[float, ...]], period_length: int
+) -> dict[str, tuple[float, ...]]:
+    """Split per-period cohort volumes into per-year annual ceilings (m3/yr).
+
+    Year ``y`` (0-based) of a cohort carries
+    ``annual_ceiling(volumes[y // period_length], period_length)`` — the same
+    uniform split the rolling-horizon engine applies to its period-1 volume,
+    so each period's ``period_length`` ceilings sum back to its volume.
+    """
+
+    return {
+        cohort_id: tuple(
+            annual_ceiling(volume, period_length)
+            for volume in volumes
+            for _year in range(period_length)
+        )
+        for cohort_id, volumes in period_volumes.items()
+    }
+
+
+def _schedule_dtype_identity(dtype_key: str) -> tuple[str, str, str, int]:
+    """Parse a schedule JSON dtype key into ``(ifm, au_id, stratum, curve_id)``."""
+
+    key = json.loads(dtype_key)
+    if len(key) != DTYPE_KEY_LENGTH:
+        raise RHError(
+            "rh_schedule_dtype_malformed",
+            f"WS3 schedule dtype key is not a {DTYPE_KEY_LENGTH}-element list: "
+            f"{dtype_key!r}",
+        )
+    _tsa, ifm, au_id, stratum_code, curve_id = (str(part) for part in key)
+    return ifm, au_id, stratum_code, int(curve_id)
+
+
+def _is_initial_lineage_age(initial_age: int, age_smashing: AgeSmashing) -> bool:
+    """Whether an implied t=0 age lies on the age-smashing midpoint lattice."""
+
+    return initial_age >= 0 and (initial_age - age_smashing.midpoint) % age_smashing.width == 0
+
+
+def _is_regenerated_age(age: int, period_length: int) -> bool:
+    """Whether a schedule age lies on the WS3 regeneration lattice."""
+
+    return (age - WS3_HARVEST_RESET_AGE) % period_length == 0
+
+
+def _require_disjoint_age_lattices(period_length: int, age_smashing: AgeSmashing) -> None:
+    """Fail fast unless initial-lineage and regeneration ages can never collide.
+
+    The midpoint lattice is invariant under ``+period_length`` only when the
+    smashing width divides the period length, and it is disjoint from the
+    regeneration lattice only when the midpoint and the WS3 reset age differ
+    modulo the width.
+    """
+
+    width = age_smashing.width
+    if (
+        age_smashing.enabled
+        and period_length % width == 0
+        and (age_smashing.midpoint - WS3_HARVEST_RESET_AGE) % width != 0
+    ):
+        return
+    raise RHError(
+        "rh_schedule_lattice_ambiguous",
+        "multi-period schedule lineage needs age smashing enabled, a period "
+        f"length ({period_length}) divisible by the smashing width ({width}), and "
+        f"a midpoint ({age_smashing.midpoint}) off the WS3 regeneration residue "
+        f"({WS3_HARVEST_RESET_AGE} mod {width}); got enabled={age_smashing.enabled}",
+    )
+
+
+def _require_state_on_midpoint_lattice(
+    state: pd.DataFrame, age_smashing: AgeSmashing
+) -> None:
+    """Fail fast when a t=0 cohort age is not an age-smashing class midpoint."""
+
+    off_lattice = state.loc[
+        (state["age"] - age_smashing.midpoint) % age_smashing.width != 0, "age"
+    ]
+    if off_lattice.empty:
+        return
+    raise RHError(
+        "rh_schedule_state_off_lattice",
+        f"{len(off_lattice)} state cohorts have ages off the {age_smashing.width}-year "
+        f"midpoint lattice (midpoint {age_smashing.midpoint}), e.g. age "
+        f"{int(off_lattice.iloc[0])}; schedule lineage cannot be resolved",
+    )
+
+
 def _fraction_schedules(
-    state: pd.DataFrame, result: object, period_length: int
+    state: pd.DataFrame, result: object
 ) -> tuple[list[tuple[float, ...]], list[tuple[float, ...]]]:
     """Align agent H/S fractions to state row order as per-year schedules.
 
@@ -864,15 +1099,20 @@ __all__ = [
     "ARE_ROW_TOKEN_COUNT",
     "AREA_CONSERVATION_REL_TOLERANCE",
     "COHORT_COLUMNS",
+    "DTYPE_KEY_LENGTH",
     "FRACTION_SNAP_TOLERANCE",
     "RHError",
     "STATE_KEY_COLUMNS",
+    "WS3_HARVEST_RESET_AGE",
     "advance_cohort_table",
     "annual_ceiling",
+    "annual_ceiling_matrix",
     "cohort_record_id",
     "curve_age_caps",
     "inject_cohort_table",
     "read_cohort_table",
+    "run_planning",
     "run_rh",
+    "schedule_cohort_period_volumes",
     "write_cohort_table",
 ]

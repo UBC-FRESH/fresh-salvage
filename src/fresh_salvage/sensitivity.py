@@ -387,7 +387,12 @@ def _observation(parameter: str, record: object, baseline_value: object) -> Sens
 
 
 def _manifest_metrics(manifest: RHManifest) -> dict[str, float | int | None]:
-    """Flatten a rolling-horizon manifest into comparable scalar metrics."""
+    """Flatten a coupled-run manifest into comparable scalar metrics.
+
+    Single-pass manifests populate the WS3 fields of decade 1 only (D8), so the
+    summed WS3 objective covers the one solve and ``None`` entries are skipped
+    rather than summed.
+    """
 
     return {
         "total_green_harvest_m3": sum(
@@ -398,7 +403,9 @@ def _manifest_metrics(manifest: RHManifest) -> dict[str, float | int | None]:
         ),
         "total_area_burned_ha": manifest.total_area_burned_ha,
         "total_ws3_objective_value": sum(
-            record.ws3_objective_value for record in manifest.step_records
+            record.ws3_objective_value
+            for record in manifest.step_records
+            if record.ws3_objective_value is not None
         ),
         "total_principal_objective_value": sum(
             record.principal_objective_value for record in manifest.step_records

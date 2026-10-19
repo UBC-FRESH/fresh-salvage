@@ -17,6 +17,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
+| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Complete (P8.1-P8.6; pending review/PR) |
 | P9 WS4 backend spike (decision-gated backend replacement evaluation) | #40 | `feature/p9-ws4-backend` | Active (spike; decision gate) |
 
 ## Phase 0: Skeleton Scaffold
@@ -232,6 +233,61 @@ rolling-horizon pipeline.
 
 Evidence commits: `5582def`, `4007489`, `4114bd5`.
 
+## Phase 8: Single-Pass 100-Year Planning Baseline
+
+Parent issue: #33
+
+Branch: `feature/p8-single-pass-baseline` (built on PR #32,
+`fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
+
+Status: complete (P8.1-P8.6; pending independent review and the PR to `main`)
+
+Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
+principal -> agent -> fire pipeline solved once at t=0 over the full run
+with no mid-horizon re-planning — as the baseline against which `rh-run`
+(re-plans every decade) is compared. Fire is deterministic (expected rate
+`1/MFRI`), so the comparison measures re-planning and structural effects,
+not the value of information. Design contract (decisions D1-D9, config
+surface, artifact contract, test plan, risks):
+`planning/phase8-single-pass-baseline.md`.
+
+- [x] P8.1 Schedule -> year-indexed ceiling matrix and per-year principal
+      ceilings (#34).
+- [x] P8.2 Decadal growth-aware volume coefficients in principal and agent
+      (#35): unclamped decadal valuation (`decadal_per_ha_volumes`), the
+      `decadal_volume_scale` cohort surface, agent boundary rescaling with
+      a structured fail-fast, and RH-equivalence tests.
+- [x] P8.3 Grade-clock option and burned-stock continuity/reset semantics
+      (#36): `grade_clock_period`, `burned_stock_reset` in both LPs, and
+      carry-versus-reset analytic tests.
+- [x] P8.4 `single_pass` orchestrator, `single-pass-run` CLI, ensemble
+      dispatch, oracle test (#37): `single_pass.run_single_pass` solves the
+      one t=0 WS3 problem, both whole-run LPs, and the decade-block lineage
+      replay; `planning_mode`/`burned_stock_reset` config validation, the
+      `run_planning` dispatcher, the `planning_mode` ensemble axis, and the
+      steps=1 oracle (synthetic WS3 stub plus a gated real-data variant).
+- [x] P8.5 Full-TSA29 tractability probe and paired RH vs single-pass
+      evidence run (#38): probe recorded LP build/solve scaling (within
+      budget at T=100), three-arm evidence run at an active subsidy
+      (`outputs/p8_evidence/p8-evidence-summary.{md,json}`; decade 1
+      bit-identical, divergence from decade 2, the RH burned-stock boundary
+      artifact isolated by the reset arm), and a bit-identical regen-replay
+      memoization (replay 73.2 s -> 17.9 s).
+- [x] P8.6 Docs, examples, `CHANGE_LOG`, and roadmap closeout (#39):
+      `docs/model_semantics.rst` gained the "Single-Pass Planning Mode"
+      section (interpretation guard, decision units and horizon, D2-D8
+      semantics, replay, decade records, mode constraints) plus updated
+      principal/agent/rolling-horizon sections; `docs/cli.rst` the full
+      `single-pass-run` reference; `docs/ensembles.rst` the `planning_mode`
+      axis with a paired RH-vs-single-pass grid example; single-pass
+      pointers in `docs/index.rst` / `quickstart.rst` / `validation.rst`;
+      `examples/README.md` cross-links the paired runs.
+
+Verification: `python -m ruff check .`, `python -m pytest` (322 tests),
+`sphinx-build -b html docs _build/html -W`, `python -m build`, and
+`twine check dist/*` are clean on the branch (local runs under
+`taskset -c 0-3`, `OMP_NUM_THREADS=4`).
+
 ## Phase 9: WS4 Backend Spike (Decision Gate)
 
 Parent issue: #40
@@ -276,6 +332,10 @@ The Grade Transition work is tracked in parent issue #18, with principal child
 issue #20 and agent child issue #21. Completed execution steps are recorded in
 issues #22-#27. Principal fire and decay coefficient follow-up work is tracked
 in issue #28.
+
+Phase 8 (single-pass planning baseline, parent issue #33) is complete on
+`feature/p8-single-pass-baseline` (P8.1-P8.6; pending independent review and
+the PR to `main`); see the Phase 8 section above.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity
