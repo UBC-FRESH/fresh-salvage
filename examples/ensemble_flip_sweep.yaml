@@ -27,7 +27,7 @@ base:
   period_length: 10
   steps: 10
   max_age: 999
-  workers: 1
+  workers: 8
   age_smashing:
     enabled: true
     width: 10
@@ -50,7 +50,7 @@ binary_search:
   metric: total_burned_harvest_m3
   fixed:
     burn_rate_multiplier: 1.0
-max_workers: 1
+max_workers: 4
 output_root: outputs/ensemble_flip_sweep
 metadata:
   description: Adaptive binary search for the subsidy at which burned salvage becomes positive; 100-year rolling-horizon probes.
