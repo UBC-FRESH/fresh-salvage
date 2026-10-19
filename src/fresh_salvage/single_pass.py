@@ -27,9 +27,13 @@ re-planning is compared against (planning decisions D1-D9 in
    the same horizon;
 4. :func:`replay_lineage` walks the agent's annual H/S fractions decade by
    decade through :func:`fresh_salvage.fire.simulate_cohort_years`, aging
-   survivors, regenerating everything that leaves the live pool, and keeping
-   the replayed burned inventory consistent with the LP (carried by default,
-   dropped at each boundary under ``burned_stock_reset``).
+   survivors and regenerating everything that leaves the live pool. The
+   replay tracks the live trajectory only: salvage is reported straight from
+   the LP schedule (``area_salvaged_ha``) and its feasibility is enforced by
+   the agent LP's own rows, because the LP re-expresses its carried burned
+   stock in each decade's per-ha volume units (``v_k / v_{k+1}``,
+   :func:`fresh_salvage.agent._decade_boundary_ratio`) while the replay has
+   no burned-unit machinery to match that gate.
 
 Lineage replay and the regeneration convention (R6 reconciled)
 --------------------------------------------------------------
@@ -134,7 +138,10 @@ class _ReplayLineage:
     initial state row whose agent schedule drives the lineage (``None`` for
     regen sub-cohorts, which are never harvested). ``elapsed_years`` counts the
     years since formation at the start of the current decade; it indexes the
-    memoized zero-harvest trajectory of a regen sub-cohort.
+    memoized zero-harvest trajectory of a regen sub-cohort. ``burned_before``
+    is carried and updated for parity with the LP's boundary semantics but
+    never enters a reported output (salvage is not replayed; see
+    :func:`replay_lineage`).
     """
 
     tsa: str
@@ -170,17 +177,27 @@ def replay_lineage(
     annual fractions per state row (agent H/S fractions of the t=0 standing
     volume, the same shape :func:`rh.advance_cohort_table` consumes per step).
     Every decade runs each active t=0 lineage through
-    :func:`fresh_salvage.fire.simulate_cohort_years` from its carried live and
-    burned inventories, so the LP's dynamics and the replay stay one source of
-    truth; regen sub-cohorts carry no harvest schedule, so one memoized fresh
-    zero-harvest trajectory per burn rate supplies their decade slices with
-    identical floats (:func:`_zero_harvest_decade`). ``burned_stock_reset``
-    drops the carried burned inventory at every decade start, mirroring the
-    LP's boundary rows (the live trajectory, and so the reported state and
-    burned area, are unaffected).
+    :func:`fresh_salvage.fire.simulate_cohort_years` from its carried live
+    inventory and harvest schedule. **Salvage is not replayed.** The agent LP
+    owns salvage feasibility — under decadal growth it carries the burned
+    inventory in the next decade's per-ha volume units
+    (:func:`fresh_salvage.agent._decade_boundary_ratio`, ``v_k / v_{k+1}``) —
+    and every replayed output is salvage-independent: the live balance and
+    ``burn_influx`` take no salvage input
+    (:func:`fresh_salvage.fire.simulate_cohort_years`), and
+    ``area_salvaged_ha`` is summed from the raw LP schedule below. Feeding
+    the LP's raw salvage fractions into the simulation against the replay's
+    t=0-fraction burned carry could reject a schedule the LP proved feasible,
+    so the replay leaves salvage to the LP and reports it directly. Regen
+    sub-cohorts carry no harvest schedule, so one memoized fresh zero-harvest
+    trajectory per burn rate supplies their decade slices with identical
+    floats (:func:`_zero_harvest_decade`). ``burned_stock_reset`` still
+    zeroes the carried burned inventory at every decade start; that carry
+    never enters a reported output either way.
 
     Raises ``SinglePassError`` on shape mismatches, unknown burn rates, missing
-    age caps, or an area-conservation violation; nothing is written to disk.
+    age caps, a harvest that overruns the replayed live volume, or an
+    area-conservation violation; nothing is written to disk.
     """
 
     if steps <= 0 or period_length <= 0:
@@ -253,7 +270,7 @@ def replay_lineage(
                 harvest, salvage = _decade_schedules(
                     lineage, harvests, salvages, year_start, year_stop, period_length
                 )
-                years = _simulate_decade(lineage, harvest, salvage, decay_rate)
+                years = _simulate_decade(lineage, harvest, decay_rate)
             live_end = years[-1].live_after
             removed = max(0.0, lineage.live_before - live_end)
             burned_decade += (
@@ -268,6 +285,8 @@ def replay_lineage(
                         lineage,
                         age=min(lineage.age + period_length, cap),
                         live_before=live_end,
+                        # Inert burned carry: salvage is not replayed (the LP
+                        # owns it); the reset still zeroes it for LP parity.
                         burned_before=(
                             0.0 if burned_stock_reset else years[-1].burned_after
                         ),
@@ -313,10 +332,20 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
 
     Requires a validated ``planning_mode="single_pass"`` config (the CLI's
     ``single-pass-run`` forces it; the :func:`fresh_salvage.rh.run_planning`
-    dispatcher routes by it) and ``horizon >= steps``. Raises
-    ``SinglePassError`` on fatal boundary, solver, replay, or state failures;
-    decade records are flushed to ``steps_path`` as they are emitted, so a
-    failed run still leaves its partial trajectory on disk.
+    dispatcher routes by it) and ``horizon >= steps``.
+
+    Failure contract: the input loaders that run before the staged section
+    (economics assembly, stands/yields reads, bridge resolution,
+    ``ws3.load_full_model``) raise their own module errors unwrapped
+    (:class:`fresh_salvage.rh.RHError`, :class:`fresh_salvage.ws3.WS3Error`,
+    :class:`fresh_salvage.principal.PrincipalError`,
+    :class:`fresh_salvage.agent.AgentError`). Everything from the boundary
+    write onward — the single WS3 solve, the schedule mapping, both LPs, and
+    the lineage replay — reports as ``SinglePassError``: layer failures wrap
+    into ``single_pass_failed`` with the inner code quoted, and the run-level
+    guards raise their own ``single_pass_*`` codes. Decade records are flushed
+    to ``steps_path`` as they are emitted, so a failed run still leaves its
+    partial trajectory on disk.
     """
 
     if config.planning_mode != "single_pass":
@@ -490,7 +519,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
 
         # 100-year lineage replay in decade blocks; every boundary snapshot is
         # written as an ARE section (step_00 came from the boundary parse).
-        harvests, salvages = rh._fraction_schedules(state, agent_result, horizon)
+        harvests, salvages = rh._fraction_schedules(state, agent_result)
         replay = replay_lineage(
             state,
             harvests=harvests,
@@ -543,14 +572,10 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
             steps_file.write(record.model_dump_json() + "\n")
             steps_file.flush()
 
-    status = (
-        "optimal"
-        if all(
-            record.ws3_status is None or record.ws3_status == "optimal"
-            for record in step_records
-        )
-        else "degraded"
-    )
+    # The run status is the single t=0 WS3 solve's status (the only solve
+    # status the decade records carry; every later record leaves it unset,
+    # and a non-optimal solve already raised above).
+    status = ws3_status
     manifest = RHManifest(
         run_id=config.run_id,
         stands_path=config.stands_path,
@@ -779,7 +804,9 @@ def _decade_schedules(
     """Return one t=0 lineage's harvest/salvage slice of the current decade.
 
     Only t=0 cohorts carry a schedule; regen sub-cohorts are never harvested
-    (D3) and take the memoized zero-harvest trajectory path instead.
+    (D3) and take the memoized zero-harvest trajectory path instead. Only the
+    harvest slice drives the replay simulation (salvage is not replayed); the
+    salvage slice is reporting-only (``area_salvaged_ha``).
     """
 
     return (
@@ -830,10 +857,22 @@ def _zero_harvest_decade(
 def _simulate_decade(
     lineage: _ReplayLineage,
     harvest: tuple[float, ...],
-    salvage: tuple[float, ...],
     decay_rate: float,
 ) -> list[fire.FireYearState]:
-    """Run one decade of the replayed fire dynamics for one lineage."""
+    """Run one decade of the replayed live dynamics for one lineage.
+
+    Salvage is deliberately NOT passed to the fire simulation. The agent LP
+    owns salvage feasibility, and it carries the burned inventory in each
+    decade's per-ha volume units (``v_k / v_{k+1}``); the lineage's
+    t=0-fraction burned carry is not in those units, so replaying the raw LP
+    salvage fractions against it could reject a schedule the LP proved
+    feasible. Nothing reported depends on salvage: the live balance and
+    ``burn_influx`` are salvage-free in
+    :func:`fresh_salvage.fire.simulate_cohort_years`, and
+    :func:`replay_lineage` sums ``area_salvaged_ha`` from the raw schedule.
+    The burned carry keeps evolving for parity with the LP's boundary
+    semantics but never enters a reported value.
+    """
 
     try:
         return fire.simulate_cohort_years(
@@ -841,7 +880,7 @@ def _simulate_decade(
             initial_burned=lineage.burned_before,
             burn_rate=lineage.burn_rate,
             harvest_schedule=harvest,
-            salvage_schedule=salvage,
+            salvage_schedule=(0.0,) * len(harvest),
             decay_rate=decay_rate,
         )
     except fire.FireDynamicsError as exc:

@@ -367,6 +367,129 @@ def test_replay_burned_stock_reset_leaves_state_and_burned_area_unchanged() -> N
     assert carried.area_salvaged_ha == reset.area_salvaged_ha
 
 
+def test_replay_ignores_lp_boundary_salvage_gate_across_declining_growth() -> None:
+    # Regression (review M2): under decadal growth the agent LP re-expresses
+    # its carried burned inventory in the next decade's per-ha units
+    # (v_k / v_{k+1}, agent._decade_boundary_ratio), so a decade-2 salvage
+    # schedule may draw on more burned inventory than the replay's unconverted
+    # t=0-fraction carry holds. The replay must not re-adjudicate a schedule
+    # the LP proved feasible: it replays the live trajectory and reports the
+    # raw salvage sums. Before the fix this schedule raised
+    # single_pass_fire_simulation_failed.
+    state = _state([_row(65, 100.0)])
+    decade1 = fire.simulate_cohort_years(
+        initial_live=1.0,
+        burn_rate=BURN_RATE,
+        harvest_schedule=(0.0,) * 10,
+        salvage_schedule=(0.0,) * 10,
+        decay_rate=0.85,
+    )
+    carried_burned = decade1[-1].burned_after
+    influx = fire.burn_influx(decade1[-1].live_after, BURN_RATE)
+    # Declining per-ha volume v_0 / v_1 = 2: the LP's decade-2 gate is
+    # 2 * carried + influx, the old replay gate only carried + influx.
+    salvage_2 = carried_burned + influx + 0.5 * carried_burned
+    assert carried_burned + influx < salvage_2 <= 2.0 * carried_burned + influx
+    harvests = [(0.0,) * 20]
+    salvages = [(0.0,) * 10 + (salvage_2,) + (0.0,) * 9]
+
+    replay = single_pass.replay_lineage(
+        state,
+        harvests=harvests,
+        salvages=salvages,
+        steps=2,
+        period_length=10,
+        decay_rate=0.85,
+        age_caps=_age_caps(),
+        regeneration_age=5,
+    )
+
+    assert replay.area_salvaged_ha[0] == 0.0
+    assert replay.area_salvaged_ha[1] == pytest.approx(100.0 * salvage_2, rel=1e-12)
+    # The live trajectory and the burned-area reporting stay salvage-free:
+    # decade 2 matches the independent carried-state simulation of the t=0
+    # survivor plus the fresh regen trajectory of the decade-1 removed area.
+    regen_area = 100.0 * (1.0 - decade1[-1].live_after)
+    decade2 = fire.simulate_cohort_years(
+        initial_live=decade1[-1].live_after,
+        initial_burned=carried_burned,  # never enters burn_influx/live
+        burn_rate=BURN_RATE,
+        harvest_schedule=(0.0,) * 10,
+        salvage_schedule=(0.0,) * 10,
+        decay_rate=0.85,
+    )
+    regen_decade2 = fire.simulate_cohort_years(
+        initial_live=1.0,
+        burn_rate=BURN_RATE,
+        harvest_schedule=(0.0,) * 10,
+        salvage_schedule=(0.0,) * 10,
+        decay_rate=0.85,
+    )
+    assert replay.area_burned_ha[1] == pytest.approx(
+        100.0 * sum(year.burn_influx for year in decade2)
+        + regen_area * sum(year.burn_influx for year in regen_decade2),
+        rel=1e-12,
+    )
+
+
+def test_replay_accepts_agent_lp_boundary_salvage_under_declining_growth() -> None:
+    # The LP-driven variant of the M2 regression: an agent LP with declining
+    # per-ha volume (v_0 / v_1 = 2) and a salvage window capped at the end of
+    # decade 1 salvages at its boundary-rescaled gate in decade 2's first
+    # year — more than the replay's unconverted carry holds. The replay must
+    # complete on the LP's own optimal schedule (the pre-fix replay raised
+    # single_pass_fire_simulation_failed on it).
+    state = _state([_row(65, 100.0)])
+    cohort = _agent_cohort(
+        "managed:2901000:sbps_pli:2921000:65",
+        standing_volume=20_000.0,  # v_0 = 200 m3/ha
+        burn_rate=BURN_RATE,
+        green_price_m3=10.0,  # negative green margin: no green harvest
+        burned_price_m3=150.0,  # positive salvage margin
+        decadal_volume_scale=(200.0, 100.0),
+    )
+    offers = [(1.0,) * 9 + (0.0,) + (1.0,) * 10]
+    result = agent.solve_agent(
+        [cohort],
+        offers,
+        horizon=20,
+        decay_rate=0.85,
+        discount_rate=0.03,
+        period_length=10,
+        grade_clock_period=10,
+    )
+    harvests, salvages = rh._fraction_schedules(state, result)
+    salvage_year_11 = salvages[0][10]
+    assert salvage_year_11 > 0.0
+
+    decade1 = fire.simulate_cohort_years(
+        initial_live=1.0,
+        burn_rate=BURN_RATE,
+        harvest_schedule=harvests[0][:10],
+        salvage_schedule=salvages[0][:10],
+        decay_rate=0.85,
+    )
+    old_gate = decade1[-1].burned_after + fire.burn_influx(
+        decade1[-1].live_after, BURN_RATE
+    )
+    assert salvage_year_11 > old_gate  # exactly what the pre-fix replay rejected
+
+    replay = single_pass.replay_lineage(
+        state,
+        harvests=harvests,
+        salvages=salvages,
+        steps=2,
+        period_length=10,
+        decay_rate=0.85,
+        age_caps=_age_caps(),
+        regeneration_age=5,
+    )
+
+    assert replay.area_salvaged_ha[1] == pytest.approx(
+        100.0 * sum(salvages[0][10:20]), rel=1e-12
+    )
+
+
 @pytest.mark.parametrize(
     ("kwargs", "code"),
     [
@@ -1457,3 +1580,52 @@ def test_real_data_oracle_single_pass_steps1_matches_rh_step1(tmp_path: Path) ->
     _compare_final_states(
         single_pass_result.final_state_path, rh_result.final_state_path
     )
+
+
+def test_real_data_single_pass_steps2_replay_smoke(tmp_path: Path) -> None:
+    """Gated smoke: decade 2+ of the true single-pass replay on TSA29 inputs.
+
+    One real WS3 solve over the canonical bridge, then the true 20-year
+    principal/agent pair and the two-decade lineage replay. This is the
+    cheapest end-to-end path through the decade-2 replay (which the steps=1
+    oracle never reaches); it asserts the run structure, the absence of the
+    pre-fix boundary salvage failure, area conservation against the bridge
+    inventory, and the last snapshot's agreement with the final state CSV.
+    """
+
+    _require_integration_inputs()
+
+    config = RHRunConfig(
+        run_id="real-smoke-sp-steps2",
+        stands_path=STANDS_PATH,
+        yields_path=STAGE1_YIELDS_PATH,
+        bridge_path=ws3.CANONICAL_TSA29_BRIDGE,
+        base_year=2025,
+        horizon=3,
+        period_length=10,
+        steps=2,
+        workers=1,
+        planning_mode="single_pass",
+        output_root=tmp_path / "sp2",
+    )
+
+    result = single_pass.run_single_pass(config)
+
+    assert result.status == "optimal"
+    assert [record.step for record in result.step_records] == [1, 2]
+    assert result.step_records[0].ws3_status == "optimal"
+    assert result.step_records[1].ws3_status is None
+    assert len(result.step_records[1].annual_green_harvest_m3) == 10
+    state_dir = tmp_path / "sp2" / "derived" / "rh_state"
+    assert (state_dir / "step_01.are").is_file()
+    assert (state_dir / "step_02.are").is_file()
+    # The step_00 snapshot is the canonicalized t=0 state the run injected;
+    # the replay conserves area across both decades against it.
+    initial_snapshot = rh.read_cohort_table(state_dir / "step_00.are")
+    final_state = pd.read_csv(result.final_state_path)
+    assert final_state["area_ha"].sum() == pytest.approx(
+        initial_snapshot["area_ha"].sum(), rel=1e-6
+    )
+    assert rh.read_cohort_table(state_dir / "step_02.are")[
+        "area_ha"
+    ].to_numpy() == pytest.approx(final_state["area_ha"].to_numpy(), rel=1e-12)

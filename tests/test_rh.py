@@ -367,7 +367,7 @@ def test_fraction_schedules_align_in_state_row_order() -> None:
     ]
 
     harvests, salvages = rh._fraction_schedules(
-        state, SimpleNamespace(decisions=decisions), 3
+        state, SimpleNamespace(decisions=decisions)
     )
 
     assert harvests == [(0.01, 0.02, 0.03), (0.01, 0.02, 0.03)]
@@ -380,7 +380,7 @@ def test_fraction_schedules_reject_out_of_order_decisions() -> None:
     decisions = [_decision(cohort_id, 2), _decision(cohort_id, 1)]
 
     with pytest.raises(rh.RHError) as excinfo:
-        rh._fraction_schedules(state, SimpleNamespace(decisions=decisions), 10)
+        rh._fraction_schedules(state, SimpleNamespace(decisions=decisions))
 
     assert excinfo.value.code == "rh_decision_order_invalid"
 
@@ -389,7 +389,7 @@ def test_fraction_schedules_reject_uncovered_cohort() -> None:
     state = _state([_row(25, 100.0)])
 
     with pytest.raises(rh.RHError) as excinfo:
-        rh._fraction_schedules(state, SimpleNamespace(decisions=[]), 10)
+        rh._fraction_schedules(state, SimpleNamespace(decisions=[]))
 
     assert excinfo.value.code == "rh_decisions_incomplete"
 

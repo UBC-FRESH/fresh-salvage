@@ -748,7 +748,7 @@ def _run_step(
         pd.DataFrame(
             [decision.model_dump() for decision in agent_result.decisions]
         ).to_parquet(decisions_path, index=False)
-        harvests, salvages = _fraction_schedules(state, agent_result, config.period_length)
+        harvests, salvages = _fraction_schedules(state, agent_result)
         new_state, totals = advance_cohort_table(
             state,
             harvests=harvests,
@@ -1014,7 +1014,7 @@ def _require_state_on_midpoint_lattice(
 
 
 def _fraction_schedules(
-    state: pd.DataFrame, result: object, period_length: int
+    state: pd.DataFrame, result: object
 ) -> tuple[list[tuple[float, ...]], list[tuple[float, ...]]]:
     """Align agent H/S fractions to state row order as per-year schedules.
 

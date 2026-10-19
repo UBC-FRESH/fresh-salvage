@@ -6,9 +6,11 @@ index, and no burned-stock reset. The Phase 8 switches must leave that LP
 bit-identical (arrays and solution) to the branch-base module at ``53ba8d1``
 (content-identical to ``09ed633``).
 
-The base module is extracted with ``git show``. A shallow CI checkout does
-not carry the base commit, so the cross-module tests skip there; the
-in-module reduction tests (defaults versus reducing arguments) always run.
+The base module is extracted with ``git show``. CI checks out the full
+history (``fetch-depth: 0`` in ``.github/workflows/ci.yml``), so the
+cross-module comparisons run there too; a locally shallow clone skips them
+with a clear message and still runs the in-module reduction tests (defaults
+versus reducing arguments), which always run.
 """
 
 from __future__ import annotations
@@ -204,6 +206,30 @@ def test_principal_horizon_within_one_decade_reduces_bit_exactly() -> None:
     assert _lp_arrays(_reduced_principal_lp()) == _lp_arrays(_static_principal_lp())
 
 
+def test_principal_horizon_shorter_than_one_decade_reduces_bit_exactly() -> None:
+    # horizon < period_length (the micro-decade case): the growth surface is
+    # single-decade, the grade clock has no wrap yet, and no decade boundary
+    # exists, so the reduced LP must still match the static one bit for bit.
+    horizon = 6
+    static = principal.build_principal_lp(
+        _principal_cohorts(growth=False),
+        horizon=horizon,
+        aac_annual_m3=5_000.0,
+        cohort_ceilings_m3=[400.0, 0.0],
+    )
+    reduced = principal.build_principal_lp(
+        _principal_cohorts(growth=True),
+        horizon=horizon,
+        aac_annual_m3=5_000.0,
+        cohort_ceilings_m3=[400.0, 0.0],
+        period_length=PERIOD_LENGTH,
+        grade_clock_period=PERIOD_LENGTH,
+        burned_stock_reset=True,
+    )
+
+    assert _lp_arrays(reduced) == _lp_arrays(static)
+
+
 def test_principal_zero_t0_volume_cohort_reduces_bit_exactly() -> None:
     # Regression (P8.4): cohorts with zero t=0 per-ha volume have an
     # area-based live basis; their decade-0 burn influx must be scaled by
@@ -242,6 +268,29 @@ def test_principal_zero_t0_volume_cohort_reduces_bit_exactly() -> None:
 
 def test_agent_horizon_within_one_decade_reduces_bit_exactly() -> None:
     assert _lp_arrays(_reduced_agent_lp()) == _lp_arrays(_static_agent_lp())
+
+
+def test_agent_horizon_shorter_than_one_decade_reduces_bit_exactly() -> None:
+    # horizon < period_length: no decade boundary, no grade-clock wrap; the
+    # reduced LP must match the static one bit for bit.
+    horizon = 6
+    static_cohorts = _agent_cohorts(growth=False)
+    static = agent.build_agent_lp(
+        static_cohorts,
+        agent.resolve_offers(static_cohorts, horizon=horizon),
+        horizon=horizon,
+    )
+    grown_cohorts = _agent_cohorts(growth=True)
+    reduced = agent.build_agent_lp(
+        grown_cohorts,
+        agent.resolve_offers(grown_cohorts, horizon=horizon),
+        horizon=horizon,
+        period_length=PERIOD_LENGTH,
+        grade_clock_period=PERIOD_LENGTH,
+        burned_stock_reset=True,
+    )
+
+    assert _lp_arrays(reduced) == _lp_arrays(static)
 
 
 def test_principal_defaults_match_branch_base_at_any_horizon() -> None:
