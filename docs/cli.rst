@@ -479,8 +479,10 @@ the inner code, such as ``ws3_solve_not_optimal`` or
 parse and validation errors), the library guards
 ``single_pass_planning_mode_required`` / ``single_pass_horizon_too_short``
 (the CLI's forced re-validation normally reports these as config errors),
-and the replay guards ``single_pass_schedule_shape_mismatch``,
-``single_pass_burn_rate_unknown``, ``single_pass_burn_rate_invalid``,
+and the replay guards ``single_pass_invalid_shape``,
+``single_pass_invalid_regeneration_age``,
+``single_pass_schedule_shape_mismatch``, ``single_pass_burn_rate_unknown``,
+``single_pass_burn_rate_invalid``,
 ``single_pass_curve_age_cap_missing``,
 ``single_pass_fire_simulation_failed``,
 ``single_pass_state_empty_after_decade``, ``single_pass_cohort_alignment``,

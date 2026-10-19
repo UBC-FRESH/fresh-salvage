@@ -465,16 +465,32 @@ mimicking the rolling-horizon boundary above: the agent's first-year burned
 and salvage rows drop the carried ``B[t-1]`` coefficient, and the
 principal's burned path is re-seeded from ``burned_volume_m3 * v_k / v_0``
 with its ``annual_burn_loss`` decay exponent restarting at
-``year mod L``. The replay drops the carried burned inventory at the same
-boundaries, so the replay and the LP agree; the live trajectory — and
-therefore the reported state and ``area_burned_ha`` — is identical either
-way. ``burned_stock_reset`` is rejected with ``planning_mode:
+``year mod L``. ``burned_stock_reset`` is rejected with ``planning_mode:
 rolling_horizon``.
+
+**Replay salvage and burned units.** The agent LP carries its burned
+inventory in each decade's per-ha volume units: the first-year burned and
+salvage rows of decade ``k+1`` multiply the ``B[t-1]`` coefficient by
+``v_k / v_{k+1}`` (``agent._decade_boundary_ratio``, R5 in the planning
+note), so a boundary where per-ha volume declines lets the LP draw on more
+burned volume than the raw (unconverted) value of its previous decade. The
+lineage replay therefore does **not** re-simulate salvage: the LP's rows
+are the single feasibility authority for salvage, the replay sums
+``area_salvaged_ha`` straight from the LP schedule, and the replayed
+outputs it does report — the state, the live trajectory, ``area_burned_ha``
+— are salvage-independent (``fire.simulate_cohort_years`` computes
+``burn_influx`` and the live balance without any salvage input). Under
+``burned_stock_reset`` the LP keeps no carried burned inventory across
+boundaries at all, and the replay's reported outputs are identical in
+either mode. The carried burned value inside the replay only mirrors the
+LP's boundary bookkeeping and never enters a reported output.
 
 **Lineage replay.** The 100-year replay runs in decade blocks from the t=0
 state, re-entering ``fire.simulate_cohort_years`` each decade with the
-carried live and burned inventories, so the LP rows and the replay keep one
-source of truth for the dynamics. Each t=0 cohort is tracked as a lineage
+carried live inventory and the agent's harvest schedule; salvage is not
+replayed (see above), and the reported burned area is the summed annual
+``burn_influx``, which depends only on the live trajectory. Each t=0
+cohort is tracked as a lineage
 by its *formation* area (its t=0 area) plus live/burned fractions of that
 reference. At every boundary, the area that left the live pool during the
 decade (green harvest plus burn influx; salvage only reclassifies burned

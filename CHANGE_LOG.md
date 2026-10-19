@@ -5,6 +5,36 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 8 review round (fix-first findings applied; parent issue #33):
+  - M1: `cli.rh_run` now calls `rh.run_planning(config)` instead of
+    `rh.run_rh`, so an `rh-run` config with `planning_mode: single_pass`
+    runs the single-pass path (no forced mode; `single-pass-run` keeps its
+    forced re-validation). The CLI summary follows the executed mode. New
+    CLI tests cover both modes.
+  - M2: the single-pass lineage replay no longer re-simulates salvage. The
+    agent LP owns salvage feasibility (it re-expresses carried burned
+    inventory across decade boundaries by `v_k / v_{k+1}`), and every
+    replayed output is salvage-independent, so feeding the raw LP salvage
+    fractions against the replay's unconverted t=0-fraction carry could
+    reject a feasible schedule (`single_pass_fire_simulation_failed`).
+    `area_salvaged_ha` is still summed from the raw LP schedule; new
+    declining-`v` regression tests (hand-built and LP-driven) fail on the
+    pre-fix module and pass now.
+  - M3: CI checks out full history (`fetch-depth: 0`), so the cross-module
+    growth-equivalence tests against `53ba8d1` run in CI instead of
+    skipping on the shallow checkout.
+  - Folded minors: truthful `run_single_pass` exception contract (m2);
+    unused `period_length` parameter dropped from `rh._fraction_schedules`
+    (m3); `single_pass_invalid_shape` /
+    `single_pass_invalid_regeneration_age` added to the documented failure
+    codes (m6); `horizon < period_length` reduction tests, a gated
+    real-data `steps=2` replay smoke test, and the M2 regressions (m8); the
+    tautological status branch in `run_single_pass` simplified to a
+    commented `status = ws3_status` (m9). Deferred to backlog: m1 (zero-t0
+    burned-cap series), m4 (unconsumed surface), m5, m7.
+  - Docs aligned: `docs/model_semantics.rst` (replay salvage/burned units),
+    `docs/cli.rst` (failure codes), the planning note section 3.3, and the
+    `single_pass.py` docstrings.
 - Phase 8 P8.6 (issue #39): the single-pass documentation suite and the
   Phase 8 closeout. Documentation only — no code changes.
   - `docs/model_semantics.rst` gains a "Single-Pass Planning Mode" section
@@ -83,8 +113,10 @@ This is the project narrative for `fresh-salvage`. Newest entries first
     clock (D5) and the configured burned-stock semantics (D4/D6), then a
     100-year decade-block lineage replay (`single_pass.replay_lineage`) that
     ages survivors, regenerates everything that left the live pool at the
-    smashing midpoint, keeps the replayed burned inventory consistent with the
-    LP, and writes `derived/rh_state/step_{k:02d}.are` for `k = 0..steps`.
+    smashing midpoint, replays the salvage-independent live dynamics (the
+    LP owns salvage feasibility; salvage areas are reported from the raw
+    schedule), and writes `derived/rh_state/step_{k:02d}.are` for
+    `k = 0..steps`.
   - `RHRunConfig` gained `planning_mode: Literal["rolling_horizon",
     "single_pass"]` (default `rolling_horizon`) and `burned_stock_reset: bool`
     with cross-field validation: single pass requires `horizon >= steps` and
@@ -165,10 +197,11 @@ This is the project narrative for `fresh-salvage`. Newest entries first
     of each decade (D4).
   - RH passes nothing new, so the rolling-horizon LPs are bit-identical:
     `tests/test_phase8_growth_equivalence.py` checks LP arrays and
-    solutions for the RH-shaped usage (horizon at most one `period_length`)
-    in-module and against the branch-base module extracted from git
-    (`53ba8d1`, content-identical to `09ed633`; the cross-module tests skip
-    in a shallow CI checkout).
+    solutions for the RH-shaped usage (horizon at most one `period_length`,
+    including `horizon < period_length`) in-module and against the
+    branch-base module extracted from git (`53ba8d1`, content-identical to
+    `09ed633`; CI checks out full history so the cross-module tests run
+    there too — review M3).
 - Phase 8 P8.1 (issue #34): added year-indexed WS3 ceilings for multi-period
   plans.
   - `rh.schedule_cohort_period_volumes` maps the `cc` volume of every

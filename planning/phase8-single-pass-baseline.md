@@ -1,6 +1,6 @@
 # Phase 8: Single-Pass 100-Year Planning Baseline
 
-Status: active (P8.1-P8.6 implemented; pending independent review and PR)
+Status: active (P8.1-P8.6 implemented; independent review round applied; pending PR)
 
 Branch: `feature/p8-single-pass-baseline` (cut from
 `origin/fix/schedule-group-volume-dedup` at `9b5a0a0`, the PR #32 head;
@@ -167,10 +167,13 @@ clip in D2.
   `annual_burn_loss` decay exponent restarts at `year % L`. The replay-side
   semantics remain P8.4.
 - **Equivalence evidence.** `tests/test_phase8_growth_equivalence.py`
-  compares LP arrays and solutions for the RH-shaped usage (`horizon <= L`)
-  against the in-module static path and against the branch-base module
-  extracted from git (`53ba8d1`, content-identical to `09ed633`); the
-  cross-module tests skip in a shallow CI checkout.
+  compares LP arrays and solutions for the RH-shaped usage (`horizon <= L`,
+  including `horizon < L`) against the in-module static path and against the
+  branch-base module extracted from git (`53ba8d1`, content-identical to
+  `09ed633`). CI checks out the full history
+  (`.github/workflows/ci.yml`, `fetch-depth: 0`, review M3), so the
+  cross-module tests run there; a locally shallow clone skips them with a
+  clear message and still runs the in-module reduction tests.
 
 ### 3.2 P8.4 implementation session
 
@@ -208,10 +211,14 @@ the choices the spec left open and the corrections it surfaced.
   multi-decade t=0 cohort keeps its t=0 area as the reference; survivors are
   `reference * live_end`, regen sub-cohorts `reference * (live_start - live_end)`
   at the smashing midpoint. Each decade re-enters `fire.simulate_cohort_years`
-  with the carried burned inventory (`0.0` under `burned_stock_reset`, matching
-  the LP rows); the live trajectory — and therefore the state and
-  `area_burned_ha` — is identical either way. Zero-harvest regen lineages are
-  simulated through the same primitive.
+  with the carried live inventory and the agent harvest schedule. Salvage is
+  NOT replayed (review M2 correction below): the agent LP's rows are the
+  single salvage-feasibility authority, and every replayed output is
+  salvage-independent (`burn_influx` and the live balance take no salvage
+  input), with `area_salvaged_ha` summed from the raw LP schedule. The
+  carried burned bookkeeping mirrors the LP's boundary rows
+  (`0.0` under `burned_stock_reset`) but never enters a reported value.
+  Zero-harvest regen lineages are simulated through the same primitive.
 - **Artifact names.** The one schedule is `data/<run>-schedule.csv`, the
   run-level offers/decisions `data/<run>-offers.parquet` /
   `data/<run>-decisions.parquet` (the table in section 7).
@@ -251,6 +258,67 @@ the choices the spec left open and the corrections it surfaced.
     (`single_pass._zero_harvest_decade`) bit-identically (A/B 73.2 s -> 17.9 s
     replay; full run 118.4 s -> 62.0 s); the LP `addRow` vectorization stays
     future work (see the P8.5 note in section 6).
+
+### 3.3 Independent review round (fix-first) — applied
+
+An independent review of the Phase 8 diff (vs `53ba8d1`) returned
+fix-first with three major findings (M1-M3) and nine minor notes (m1-m9).
+This session fixed M1-M3 plus m2, m3, m6, m8, m9; m1, m4, m5, and m7 stay
+open as backlog (no code change in this round).
+
+- **M1: `rh-run` did not share the dispatcher.** `cli.rh_run` called
+  `rh.run_rh` directly, so a `planning_mode: single_pass` config failed with
+  `rh_planning_mode_invalid` despite the docs (plan section 4, `docs/cli.rst`,
+  `CHANGE_LOG.md`) promising config-driven mode switching. `cli.rh_run` now
+  calls `rh.run_planning(config)` (unchanged config; no forced mode) and the
+  CLI summary follows the executed mode; a `rolling_horizon` config behaves
+  exactly as before. CLI tests:
+  `test_cli_rh_run_dispatches_single_pass_config`,
+  `test_cli_rh_run_rolling_horizon_config_uses_run_rh`.
+- **M2: replay burned-unit mismatch (carry mode).** The agent LP re-expresses
+  its carried burned inventory in each decade's per-ha volume units
+  (`agent._decade_boundary_ratio`, `v_k / v_{k+1}`), but the replay fed the
+  raw LP salvage fractions into `fire.simulate_cohort_years` against the
+  unconverted t=0-fraction carry, so a schedule the LP proved feasible could
+  raise `single_pass_fire_simulation_failed`. At a declining boundary
+  (`v_k / v_{k+1} > 1`) the replay gate is strictly tighter than the LP's.
+  Fix: **the replay no longer re-simulates salvage**, exactly as the review
+  preferred. The LP's rows are the single salvage-feasibility authority; the
+  replay reports `area_salvaged_ha` from the raw schedule, and every other
+  replayed output (state, live trajectory, `area_burned_ha`, snapshots) is
+  salvage-independent by construction (`fire.simulate_cohort_years` computes
+  `burn_influx` and the live balance without salvage; the carried burned
+  value never enters a reported field). Regression tests (verified to fail
+  with `single_pass_fire_simulation_failed` on the pre-fix module):
+  `test_replay_ignores_lp_boundary_salvage_gate_across_declining_growth`
+  (hand-built `v_k / v_{k+1} = 2` schedule) and
+  `test_replay_accepts_agent_lp_boundary_salvage_under_declining_growth`
+  (the LP's own optimal schedule at a capped end-of-decade-1 salvage window).
+  The `burned_stock_reset` flag still zeroes the carried burned bookkeeping
+  (`0.0` at boundaries) but no longer changes anything observable; the
+  docstrings, `docs/model_semantics.rst`, and section 6 were aligned.
+- **M3: CI equivalence hole.** `.github/workflows/ci.yml` now checks out
+  full history (`fetch-depth: 0`), so the cross-module "matches branch base"
+  tests in `tests/test_phase8_growth_equivalence.py` run in CI instead of
+  skipping on the shallow default checkout. The module docstring and the
+  section 3.1 evidence note were updated.
+- **m2:** `run_single_pass`'s docstring now states the real exception
+  contract (pre-stage loaders raise `RHError`/`WS3Error`/`PrincipalError`/
+  `AgentError` unwrapped; only the staged boundary/WS3/LP/replay section
+  reports as `SinglePassError`).
+- **m3:** the unused `period_length` parameter of `rh._fraction_schedules`
+  was dropped (single pass had been passing its 100-year `horizon`).
+- **m6:** `docs/cli.rst`'s failure-code list now includes
+  `single_pass_invalid_shape` and `single_pass_invalid_regeneration_age`.
+- **m8:** two reduction tests at `horizon < period_length`
+  (`test_principal_horizon_shorter_than_one_decade_reduces_bit_exactly`,
+  `test_agent_horizon_shorter_than_one_decade_reduces_bit_exactly`); the
+  gated real-data `steps=2` smoke
+  (`test_real_data_single_pass_steps2_replay_smoke`, horizon 3) exercising
+  decade 2+ of the true replay path; and the M2 declining-`v` regressions.
+- **m9:** the tautological status branch in `run_single_pass` is now a
+  commented `status = ws3_status` (the single t=0 solve is the only solve
+  status recorded; a non-optimal solve already raised).
 
 ## 4. Configuration surface (P8.4)
 
@@ -491,9 +559,14 @@ New module `src/fresh_salvage/single_pass.py` with
 Lineage replay rules:
 
 - Each t=0 cohort is replayed with `fire.simulate_cohort_years` over
-  `steps*L` years using its agent H/S fractions. The fractions are of t=0
-  area; under `burned_stock_reset`, burned inventory is dropped at
-  boundaries exactly as in the agent LP, so the replay and the LP agree.
+  `steps*L` years using its agent harvest fractions. Salvage is not
+  replayed: the agent LP's own rows are the single salvage-feasibility
+  authority, `area_salvaged_ha` is summed from the raw schedule, and every
+  replayed output (state, live trajectory, `area_burned_ha`) is
+  salvage-independent; the carried burned bookkeeping mirrors the LP's
+  boundary rows (`0.0` under `burned_stock_reset`) but never enters a
+  reported value. (Review M2; see section 3.3.) The fractions are of t=0
+  area.
 - At each decade boundary `k`, the area that left the live pool during
   decade `k` (`area * (V_start_k - V_end_k)`: green harvest plus burn
   influx; salvage only reclassifies burned area) regenerates as a
