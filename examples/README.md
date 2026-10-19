@@ -11,6 +11,9 @@ templates — one per CLI command, plus the flip-point sweep ensemble:
 - `agent_tsa29.yaml` — agent harvest/salvage LP (`fresh-salvage agent-run`).
 - `rh_tsa29.yaml` — 100-year rolling-horizon coupled run
   (`fresh-salvage rh-run`).
+- `single_pass_tsa29.yaml` — 100-year single-pass coupled baseline
+  (`fresh-salvage single-pass-run`; one t=0 solve, no re-planning — pair it
+  with `rh_tsa29.yaml` for the decadal re-planning comparison).
 - `ensemble_tsa29.yaml` — 4-scenario smoke ensemble grid
   (`fresh-salvage ensemble-run`).
 - `ensemble_flip_sweep.yaml` — adaptive binary search for the fire-active

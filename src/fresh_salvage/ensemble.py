@@ -489,12 +489,14 @@ def _run_parallel(
 def _run_scenario_worker(
     payload: dict[str, object], verbose: bool = False
 ) -> dict[str, object]:
-    """Run one scenario's rolling-horizon run; capture any failure as a record.
+    """Run one scenario's coupled planning run; capture any failure as a record.
 
-    Module-level and pickle-friendly (spawn workers import it fresh). The
-    worker owns its scenario output root exclusively; the shared bridge is
-    read-only. PYTHONPATH and FEMIC_SRC are passed via the payload since
-    os.environ is not inherited with spawn multiprocessing.
+    The run is dispatched by ``run_config.planning_mode``
+    (:func:`fresh_salvage.rh.run_planning`), so ``planning_mode`` works as a
+    grid axis. Module-level and pickle-friendly (spawn workers import it
+    fresh). The worker owns its scenario output root exclusively; the shared
+    bridge is read-only. PYTHONPATH and FEMIC_SRC are passed via the payload
+    since os.environ is not inherited with spawn multiprocessing.
     """
     # Ensure ws3 and femic are on sys.path for spawn workers
     _patch_pythonpath(payload)
@@ -510,7 +512,7 @@ def _run_scenario_worker(
         "output_root": run_config.output_root,
     }
     try:
-        result = rh.run_rh(run_config, verbose=verbose)
+        result = rh.run_planning(run_config, verbose=verbose)
     except Exception as exc:
         return ScenarioRecord(
             **record_fields,

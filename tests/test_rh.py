@@ -15,7 +15,12 @@ import pandas as pd
 import pytest
 
 from fresh_salvage import fire, principal, rh, ws3
-from fresh_salvage.models import AgentDecisionRecord, RHRunConfig, WS3RunConfig
+from fresh_salvage.models import (
+    AgentDecisionRecord,
+    AgeSmashing,
+    RHRunConfig,
+    WS3RunConfig,
+)
 
 STRATUM = "sbps_pli"
 CURVE_ID = 2921000
@@ -362,7 +367,7 @@ def test_fraction_schedules_align_in_state_row_order() -> None:
     ]
 
     harvests, salvages = rh._fraction_schedules(
-        state, SimpleNamespace(decisions=decisions), 3
+        state, SimpleNamespace(decisions=decisions)
     )
 
     assert harvests == [(0.01, 0.02, 0.03), (0.01, 0.02, 0.03)]
@@ -375,7 +380,7 @@ def test_fraction_schedules_reject_out_of_order_decisions() -> None:
     decisions = [_decision(cohort_id, 2), _decision(cohort_id, 1)]
 
     with pytest.raises(rh.RHError) as excinfo:
-        rh._fraction_schedules(state, SimpleNamespace(decisions=decisions), 10)
+        rh._fraction_schedules(state, SimpleNamespace(decisions=decisions))
 
     assert excinfo.value.code == "rh_decision_order_invalid"
 
@@ -384,7 +389,7 @@ def test_fraction_schedules_reject_uncovered_cohort() -> None:
     state = _state([_row(25, 100.0)])
 
     with pytest.raises(rh.RHError) as excinfo:
-        rh._fraction_schedules(state, SimpleNamespace(decisions=[]), 10)
+        rh._fraction_schedules(state, SimpleNamespace(decisions=[]))
 
     assert excinfo.value.code == "rh_decisions_incomplete"
 
@@ -498,6 +503,276 @@ def test_period1_cohort_volumes_do_not_double_count_duplicate_schedule_rows(
     cohort_id = rh.cohort_record_id("managed", "2901000", STRATUM, CURVE_ID, 145)
     group_volume_m3 = (244.593 + 499.932) * _DuplicatePathScheduleModel.yield_m3_per_ha
     assert ceilings == {cohort_id: pytest.approx(group_volume_m3)}
+
+
+# --- multi-period schedule lineage and year-indexed ceilings (P8.1) ---------
+
+DTYPE_KEY = json.dumps(["29", "managed", "2901000", STRATUM, str(CURVE_ID)])
+OTHER_DTYPE_KEY = json.dumps(["29", "managed", "2901001", "ms_pli", "2921001"])
+SMASHING = AgeSmashing(enabled=True, width=10, midpoint=5)
+
+
+def _schedule(rows: list[tuple]) -> pd.DataFrame:
+    """Schedule frame of ``(period, dtype_key, age_class, area, action, volume)``."""
+
+    return pd.DataFrame(
+        rows,
+        columns=pd.Index(
+            ["period", "dtype_key", "age_class", "area_ha", "harvest_action", "volume_m3"]
+        ),
+    )
+
+
+def _period_volumes(
+    schedule: pd.DataFrame,
+    state: pd.DataFrame,
+    *,
+    implemented_periods: int = 10,
+    period_length: int = 10,
+    age_smashing: AgeSmashing = SMASHING,
+) -> dict[str, tuple[float, ...]]:
+    return rh.schedule_cohort_period_volumes(
+        schedule,
+        "cc",
+        state,
+        implemented_periods=implemented_periods,
+        period_length=period_length,
+        age_smashing=age_smashing,
+    )
+
+
+def _cohort_id(age: int) -> str:
+    return rh.cohort_record_id("managed", "2901000", STRATUM, CURVE_ID, age)
+
+
+def test_schedule_volumes_map_later_periods_back_to_initial_cohorts() -> None:
+    state = _state([_row(65, 100.0), _row(145, 50.0)])
+    schedule = _schedule(
+        [
+            (1, DTYPE_KEY, 65, 10.0, "cc", 1_000.0),
+            # Period 3 of the age-65 cohort: 65 + 10 * (3 - 1) = 85.
+            (3, DTYPE_KEY, 85, 20.0, "cc", 2_500.0),
+            # Period 2 of the age-145 cohort, split over two Model-I paths
+            # (one PR #32 dedup group): the rows sum to the group volume.
+            (2, DTYPE_KEY, 155, 5.0, "cc", 600.0),
+            (2, DTYPE_KEY, 155, 2.5, "cc", 300.0),
+        ]
+    )
+
+    volumes = _period_volumes(schedule, state, implemented_periods=4)
+
+    assert list(volumes) == [_cohort_id(65), _cohort_id(145)]
+    assert volumes[_cohort_id(65)] == (1_000.0, 0.0, 2_500.0, 0.0)
+    assert volumes[_cohort_id(145)] == (0.0, 900.0, 0.0, 0.0)
+
+
+def test_schedule_volumes_report_zero_tuples_for_unharvested_cohorts() -> None:
+    state = _state([_row(65, 100.0), _row(25, 40.0)])
+    schedule = _schedule([(1, DTYPE_KEY, 65, 10.0, "cc", 1_000.0)])
+
+    volumes = _period_volumes(schedule, state, implemented_periods=3)
+
+    assert volumes[_cohort_id(25)] == (0.0, 0.0, 0.0)
+
+
+def test_schedule_volumes_ignore_non_harvest_zero_area_and_late_rows() -> None:
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule(
+        [
+            (1, DTYPE_KEY, 65, 10.0, "null", 9_999.0),
+            (2, DTYPE_KEY, 75, 0.0, "cc", 9_999.0),
+            # Beyond the implemented periods: a regenerated stand harvested in
+            # period 12 is legal and must not trip the regeneration guard.
+            (12, DTYPE_KEY, 60, 10.0, "cc", 9_999.0),
+            (11, DTYPE_KEY, 165, 10.0, "cc", 9_999.0),
+        ]
+    )
+
+    volumes = _period_volumes(schedule, state, implemented_periods=10)
+
+    assert volumes[_cohort_id(65)] == (0.0,) * 10
+
+
+def test_schedule_volumes_regenerated_harvest_fails_fast() -> None:
+    # Cut in period 1 at age 65 resets to age 0; in period 7 the regenerated
+    # stand is 60 years old (0 mod 10) and operable again.
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule(
+        [
+            (1, DTYPE_KEY, 65, 10.0, "cc", 1_000.0),
+            (7, DTYPE_KEY, 60, 10.0, "cc", 800.0),
+        ]
+    )
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(schedule, state, implemented_periods=10)
+
+    assert excinfo.value.code == "rh_schedule_regenerated_harvest"
+    assert "period-7" in str(excinfo.value)
+
+
+def test_schedule_volumes_unknown_initial_cohort_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    # Period 2 at age 85 implies a t=0 cohort of age 75, absent from state.
+    schedule = _schedule([(2, DTYPE_KEY, 85, 10.0, "cc", 1_000.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(schedule, state)
+
+    assert excinfo.value.code == "rh_schedule_unknown_cohort"
+
+
+def test_schedule_volumes_unknown_development_type_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule([(1, OTHER_DTYPE_KEY, 65, 10.0, "cc", 1_000.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(schedule, state)
+
+    assert excinfo.value.code == "rh_schedule_unknown_cohort"
+
+
+def test_schedule_volumes_off_lattice_row_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule([(2, DTYPE_KEY, 78, 10.0, "cc", 1_000.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(schedule, state)
+
+    assert excinfo.value.code == "rh_schedule_off_lattice"
+
+
+def test_schedule_volumes_malformed_dtype_key_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule([(1, json.dumps(["29", "managed"]), 65, 10.0, "cc", 1.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(schedule, state)
+
+    assert excinfo.value.code == "rh_schedule_dtype_malformed"
+
+
+@pytest.mark.parametrize(
+    ("period_length", "age_smashing"),
+    [
+        (10, AgeSmashing(enabled=False, width=10, midpoint=5)),
+        (1, SMASHING),  # width 10 does not divide a 1-year period
+        (10, AgeSmashing(enabled=True, width=10, midpoint=0)),  # regen residue
+    ],
+)
+def test_schedule_volumes_ambiguous_lattices_fail_fast(
+    period_length: int, age_smashing: AgeSmashing
+) -> None:
+    state = _state([_row(65, 100.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(
+            _schedule([]), state, period_length=period_length, age_smashing=age_smashing
+        )
+
+    assert excinfo.value.code == "rh_schedule_lattice_ambiguous"
+
+
+def test_schedule_volumes_off_lattice_state_fails_fast() -> None:
+    state = _state([_row(65, 100.0), _row(64, 10.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(_schedule([]), state)
+
+    assert excinfo.value.code == "rh_schedule_state_off_lattice"
+
+
+@pytest.mark.parametrize(
+    ("implemented_periods", "period_length", "code"),
+    [
+        (0, 10, "rh_invalid_implemented_periods"),
+        (10, 0, "rh_invalid_period_length"),
+    ],
+)
+def test_schedule_volumes_reject_non_positive_shapes(
+    implemented_periods: int, period_length: int, code: str
+) -> None:
+    state = _state([_row(65, 100.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _period_volumes(
+            _schedule([]),
+            state,
+            implemented_periods=implemented_periods,
+            period_length=period_length,
+        )
+
+    assert excinfo.value.code == code
+
+
+def test_schedule_volumes_period1_agrees_with_rh_period1_path() -> None:
+    state = _state([_row(65, 100.0), _row(145, 50.0)])
+    schedule = _schedule(
+        [
+            (1, DTYPE_KEY, 65, 10.0, "cc", 1_000.0),
+            (1, DTYPE_KEY, 145, 5.0, "cc", 600.0),
+            (1, DTYPE_KEY, 145, 2.5, "cc", 300.0),
+            (2, DTYPE_KEY, 75, 2.5, "cc", 300.0),
+        ]
+    )
+
+    period1 = rh._period1_cohort_volumes(schedule, "cc", state)
+    volumes = _period_volumes(schedule, state, implemented_periods=1)
+
+    assert {
+        cohort_id: values[0] for cohort_id, values in volumes.items() if values[0] > 0.0
+    } == period1
+
+
+def test_annual_ceiling_matrix_splits_each_period_uniformly() -> None:
+    period_volumes = {"a": (1_000.0, 0.0, 250.0), "b": (0.0, 0.0, 0.0)}
+
+    matrix = rh.annual_ceiling_matrix(period_volumes, 10)
+
+    assert matrix["a"] == (100.0,) * 10 + (0.0,) * 10 + (25.0,) * 10
+    assert matrix["b"] == (0.0,) * 30
+    for period, volume in enumerate(period_volumes["a"]):
+        assert sum(matrix["a"][10 * period : 10 * (period + 1)]) == pytest.approx(
+            volume, abs=1e-6
+        )
+
+
+def test_annual_ceiling_matrix_single_period_matches_rh_broadcast() -> None:
+    # RH passes annual_ceiling(decadal, L) as one scalar per cohort; the
+    # one-period matrix row is exactly that scalar repeated L times.
+    decadal = 5_003_960.3
+
+    matrix = rh.annual_ceiling_matrix({"a": (decadal,)}, 10)
+
+    assert matrix["a"] == (rh.annual_ceiling(decadal, 10),) * 10
+
+
+def test_year_indexed_ceilings_flow_through_principal_lp() -> None:
+    # Two implemented decades: WS3 schedules 4,000 m3 in decade 1 and
+    # 1,500 m3 in decade 2. Positive cashflow fills each year's ceiling, so
+    # per-decade offered volume equals the WS3 decade volume.
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule(
+        [
+            (1, DTYPE_KEY, 65, 10.0, "cc", 4_000.0),
+            (2, DTYPE_KEY, 75, 5.0, "cc", 1_500.0),
+        ]
+    )
+    matrix = rh.annual_ceiling_matrix(
+        _period_volumes(schedule, state, implemented_periods=2), 10
+    )
+    cohorts = [_cohort(_cohort_id(65), 10_000.0)]
+
+    result = principal.solve_principal(
+        cohorts,
+        horizon=20,
+        aac_annual_m3=1_000_000.0,
+        cohort_ceilings_m3=[matrix[cohort.cohort_id] for cohort in cohorts],
+    )
+
+    offered = [volumes.green_volume_m3 for volumes in result.per_year_volumes]
+    assert sum(offered[:10]) == pytest.approx(4_000.0, rel=1e-6)
+    assert sum(offered[10:]) == pytest.approx(1_500.0, rel=1e-6)
 
 
 # --- WS3 ceiling flow-through into the principal LP --------------------------

@@ -33,6 +33,9 @@ Data Flow
                     (5) rh: rolling-horizon engine
                         (10 decadal steps, in-memory inventory injection,
                          fire replay, area-conserving transitions)
+                        single_pass: whole-run baseline
+                        (one t=0 WS3 solve, one principal/agent LP over
+                         steps x period_length years, one lineage replay)
                         ensemble: scenario-grid driver
                         (cartesian axes, spawn process pool)
                                  v
@@ -41,8 +44,8 @@ Data Flow
 The standalone commands (``ingest``, ``ws3-run``, ``principal-run``,
 ``agent-run``) exercise layers 1-4 individually against on-disk boundary
 artifacts; ``rh-run`` couples all layers in memory with the canonical ARE
-round-trip per step; ``ensemble-run`` replicates ``rh-run`` over a scenario
-grid.
+round-trip per step (or dispatches to ``single_pass`` by ``planning_mode``);
+``ensemble-run`` replicates that coupled run over a scenario grid.
 
 Module Map
 ----------
@@ -86,7 +89,18 @@ Module Map
 ``rh``
    Rolling-horizon coordination loop: cohort state table (ARE round-trip),
    in-memory period-0 inventory injection, decadal-to-annual ceiling split,
-   principal/agent coupling, fire replay, area-conserving transitions.
+   principal/agent coupling, fire replay, area-conserving transitions. Also
+   the multi-period schedule-to-cohort ceiling mapper (P8.1) and the
+   ``run_planning`` dispatcher that selects an engine by ``planning_mode``.
+
+``single_pass``
+   Single-pass 100-year planning baseline: one WS3 solve at t=0, per-cohort
+   per-year WS3 ceilings, one principal/agent LP pair over
+   ``steps * period_length`` years with the decadal growth surface, grade
+   clock, and burned-stock semantics, then one decade-block lineage replay
+   (``replay_lineage``) that ages survivors, regenerates everything that left
+   the live pool at the smashing midpoint, and writes the decade-boundary
+   state snapshots. Emits the ``rh-run``-comparable decade records.
 
 ``ensemble``
    Scenario-grid driver: cartesian expansion over named ``RHRunConfig``
