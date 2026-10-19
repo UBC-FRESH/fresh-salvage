@@ -18,6 +18,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
 | P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Complete (P8.1-P8.6; merged via PR #46; #33 closed) |
+| P9 WS4 backend spike (decision-gated backend replacement evaluation) | #40 | `feature/p9-ws4-backend` | Closed — NO-GO (keep WS3; 2026-10-19) |
 
 ## Phase 0: Skeleton Scaffold
 
@@ -288,6 +289,72 @@ Verification: `python -m ruff check .`, `python -m pytest` (322 tests),
 `twine check dist/*` are clean on the branch (local runs under
 `taskset -c 0-3`, `OMP_NUM_THREADS=4`).
 
+## Phase 9: WS4 Backend Spike (Decision Gate)
+
+Parent issue: #40
+
+Branch: `feature/p9-ws4-backend`
+
+Status: closed (2026-10-19) — decision gate outcome: **NO-GO for this
+project (keep WS3)**. P9.1/P9.2 complete (#41, #42); P9.3 (#43) not
+pursued; P9.4 (#44) decision recorded; P9.5 (#45) deferred. Evidence:
+`planning/phase9-ws4-scale-test-results.md`; decision record:
+`planning/phase9-ws4-backend-spike.md` ("Decision (2026-10-19)").
+
+Goal: evaluate whether WS4 (https://github.com/UBC-FRESH/ws4) can replace the
+WS3 wood-supply backend — and possibly the custom principal/agent HiGHS LPs —
+in `fresh-salvage`. WS4 skips the LP matrix build in favour of a
+goal-programming metaheuristic search (simulated annealing, tabu, ILS) and
+adds spatial features WS3 lacks (patch size distribution targets, roads, mill
+deliveries) that could better capture net value creation per block. This is a
+spike with a decision gate, not a big-bang swap: the WS3-based pipeline
+remains the reference until a swap is proven on evidence. Seed scoping:
+`planning/phase9-ws4-backend-spike.md`. Feasibility assessment (premise
+corrections: a dataset build step remains; capability superset does not imply
+semantic parity; spatial features are inert on TSA29 until topology/roads
+data exist): `planning/phase9-ws4-assessment.md`.
+
+- [x] P9.1 WS4 intake and API smoke (#41).
+- [x] P9.2 Schedule-only bridge proof of concept (#42).
+- [x] P9.3 Coupled subsidy-scan experiment (#43) — closed, not pursued
+      (no-go decision).
+- [x] P9.4 Evaluation and decision gate (#44) — closed; outcome: **NO-GO
+      for this project (keep WS3)**.
+- [x] P9.5 Topology and roads data assessment for TSA29 (#45) — closed,
+      deferred (future lab work if WS4 adoption is revisited).
+
+Gate criteria (continue only if): WS4 ingests TSA29-comparable inputs and
+yields usable schedules; performance is competitive with the current stack; a
+coupling path exists without unacceptable hacks or data fabrication; and the
+result can be explained/defended as cleanly as the current stack. Candidate
+integration paths to assess: (a) drop-in schedule backend, (b)
+offer/take-leave block formulation, (c) full swap to WS4-side policy
+wrappers. Checkpoint: run P9.1+P9.2 first (~4-6 person-days) and decide
+continue/kill/defer before P9.3/P9.4; path (b) is out of contract (AGENTS.md
+linear-pipeline rule) without a maintainer-approved amendment. See
+`planning/phase9-ws4-assessment.md`, sections 5-8.
+
+Checkpoint record (2026-10-19): P9.1/P9.2 closed (#41, #42) with the
+full-TSA29 aspatial scale test — ingest/validate clean at 646,031
+fragment-portions / 421,945 blocks; 15.4 M candidate chains measured (the
+~27.7 M estimate did not hold); a 100-yr WS3-mirror search reaches 9/10
+per-decade floors (p1 at 96.8%; terminal liquidation 100.0% of the WS3
+level) in ~30 min single-core / 3.56 GB peak (~181 s per decade-step vs the
+WS3 rolling step's ~11 s). Scale and level both pass; the scale and
+level-reachability kill criteria are **not triggered**. Evidence:
+`planning/phase9-ws4-scale-test-results.md`.
+
+Decision record (2026-10-19): the gate closed **NO-GO for this project —
+keep WS3**. The WS4 swap is not adopted: the aspatial step is ~16x the WS3
+per-decade step and ~30x the single-pass pipeline (~30 min vs 62 s/193 s)
+and heuristic where WS3 is exact; WS4's spatial differentiator is blocked on
+non-existent topology/roads/mill data (P9.5 deferred); and the project's
+results pipeline stays on WS3. The decision could be revisited if the
+spatial datasets are built (P9.5 scope) and parallel-scaling evidence
+brings WS4 runs within budget; WS4 remains a lab-level candidate (clone
+and clean-room evidence retained). Full record:
+`planning/phase9-ws4-backend-spike.md`, "Decision (2026-10-19)".
+
 ## Current Next Steps
 
 The Grade Transition work is tracked in parent issue #18, with principal child
@@ -298,9 +365,12 @@ in issue #28.
 Phase 8 (single-pass planning baseline, parent issue #33) is complete and
 merged to `main` via PR #46 (merge commit `dd26448`; parent issue #33
 closed); see the Phase 8 section above. The deferred P8 review minors
-(m1, m4, m5, m7) remain open as backlog, and the next roadmap item is the
-decision-gated Phase 9 WS4 backend spike (parent issue #40,
-`feature/p9-ws4-backend`).
+(m1, m4, m5, m7) remain open as backlog. Phase 9 (WS4 backend spike,
+parent issue #40, `feature/p9-ws4-backend`) is closed with a **NO-GO**
+decision (2026-10-19) after the P9.1/P9.2 aspatial checkpoint: the
+WS3-based pipeline stays the project's results pipeline; see the Phase 9
+section above and `planning/phase9-ws4-backend-spike.md`. No active
+feature branch remains for this work.
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity

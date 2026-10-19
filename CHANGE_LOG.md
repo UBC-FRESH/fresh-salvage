@@ -5,6 +5,70 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Phase 9 closed **NO-GO** on the WS4 backend swap (2026-10-19; decision
+  gate P9.4, #44; parent issue #40): the project keeps WS3 as its results
+  pipeline. Rationale: the aspatial WS4 step is ~16x the WS3 per-decade
+  step and ~30x the single-pass pipeline (~30 min vs 62 s/193 s) and
+  heuristic where WS3 is exact; WS4's spatial differentiator (patch
+  targets, roads, mills) is blocked on non-existent topology/roads/mill
+  data; and the project's results pipeline (thesis numbers, Phase 8
+  evidence) stays on WS3. P9.3 (#43) closed as not planned; P9.5 (#45)
+  closed as deferred (future lab work if WS4 adoption is revisited);
+  P9.1/P9.2 evidence retained
+  (`planning/phase9-ws4-scale-test-results.md`). What could reopen it:
+  spatial datasets built for TSA29, and parallel-scaling evidence bringing
+  WS4 within budget; WS4 remains a lab-level candidate (clone and
+  clean-room evidence retained). Docs-only change: a decision section in
+  `planning/phase9-ws4-backend-spike.md`, the assessment and scale-test
+  status lines updated, and `ROADMAP.md` marks the phase closed.
+- Phase 9 aspatial scale test complete on the full TSA29 estate (P9.1/P9.2
+  evidence; issues #41 and #42 closed, checkpoint held on #40). Clean-room
+  spike (untracked workspace; WS4 `0.1.0` installed editable from a copy of
+  the reviewed `b380c128` checkout — the clone stayed clean and no repo or
+  instance was modified). Sanitized record:
+  `planning/phase9-ws4-scale-test-results.md`. No code changes.
+  - Environment: Python 3.12 venv, `pip install -e .[geo,opt]` 49 s, no
+    conflicts; deps resolve to pandas 3.0.6 / numpy 2.5.4 (WS4 pins lower
+    bounds only — versions unverified against WS4 CI; pin before any
+    adapter work). The packaged synthetic example passes the full API
+    chain build → simulate → optimize.
+  - Ingest: legacy matrix + a portions-based fragments file — one fragment
+    per (BLOCK, TRACK) portion, **managed portion first** within each block
+    as `Optimizer.candidates()` requires (verified 421,945/421,945 checks;
+    the source's unmanaged-first order would make 224,086 blocks /
+    1,218,311 managed ha unharvestable). 646,031 fragment-portions over
+    421,945 blocks; `ws4 validate` clean; 12 tables; ingest 2.0 s /
+    validate 1.4 s. Crosswalk exact at portion level (managed 1,218,310.5
+    ha; portion type ⇔ IFM on all 646,031 rows; the 2903xxx band fully
+    covered); the one-fragment-per-block alternative (+110% managed-area
+    overstatement) rejected.
+  - Simulate: full-estate 100-y empty replay 8.28 s / 823 MB (30-y 3.25 s);
+    `feature.Area.managed` = 1,218,310.51 ha exactly.
+  - Candidates: **15.4 M chains / 212,011 blocks** (2–113 per block) in
+    17.7 s / 2.29 GB; the ~27.7 M estimate did not hold (WS4 caps chains
+    per block); enumeration is not a bottleneck.
+  - Optimizer (SA, seed 42, 350k iterations, single core, `lns_weight=0`):
+    prime run (floors + ceiling) 1,809 s — 9/10 WS3 per-decade floors met
+    (p1 at 85.3%, p10 100.0%); mirror run (+ even-flow band) 1,817 s —
+    9/10 floors, p1 at 96.8%, band met every period, terminal liquidation
+    99.8% of the AAC-derived ceiling; residual 0.18 Mm³ closing at
+    ~40 m³/iteration ⇒ ~355–400k iterations (~30–35 min single-core) to
+    zero; peak RSS 3.56 GB. Two runs bit-identical over 148,018 common
+    iterations (deterministic per seed).
+  - Verdict: the WS3 volume level is **reachable** at full estate aspatial
+    scale; the scale kill-criterion (hours per step / memory blowup) and
+    the level-reachability kill-criterion are **not triggered** — ~181 s
+    per decade-step as run vs the WS3 rolling step's ~11 s and the ~62 s
+    single-pass (slower, not hours; islands untested). Portability gotchas
+    for any driver: `time_limit` never enforced; outputs flush only at the
+    end (external kills lose the incumbent — add incremental
+    checkpointing); the default `lns_weight=0.2` is prohibitive at this
+    scale.
+  - Docs: new `planning/phase9-ws4-scale-test-results.md`; the assessment
+    gains the measured section and the two cleared kill criteria; the
+    spike note marks P9.1/P9.2 recorded; `ROADMAP.md` ticks P9.1/P9.2 and
+    records the next decision point (P9.3 and/or P9.5); issues #41/#42
+    closed with evidence comments and a checkpoint comment on #40.
 - Phase 8 review round (fix-first findings applied; parent issue #33):
   - M1: `cli.rh_run` now calls `rh.run_planning(config)` instead of
     `rh.run_rh`, so an `rh-run` config with `planning_mode: single_pass`
@@ -101,6 +165,35 @@ This is the project narrative for `fresh-salvage`. Newest entries first
     LP build + solve is within budget at T=100 (worst 27.7 s build, 46.2 s
     solve, 2.4 GB peak RSS), so the batched-CSR LP assembly and recursive
     `cum_offer` rewrites (planning R1/R2) remain future work.
+- Phase 9 feasibility brief completed. The condensed assessment is
+  `planning/phase9-ws4-assessment.md`: WS4 reviewed at `b380c128`
+  (Apache-2.0, `0.1.0`, Phase 12 active), a weighted goal-programming
+  metaheuristic with soft targets and no optimality claim; premise
+  corrections (a dataset build step remains; capability superset does not
+  imply semantic parity — the all-zero product-criterion patch targets and
+  the mill-destination policy difference are WS4's own measured backlog
+  items; spatial features are inert on TSA29 until topology/roads data
+  exist); TSA29 data plumbing (both ingest formats and fragments present,
+  crosswalk and the 2903xxx AU coverage the top unknowns, topology empty, no
+  road/mill tables or rates); capability matrix; three integration paths with
+  the path (b) repo-contract conflict; decisive questions; viability and kill
+  criteria; and the P9.1+P9.2-first sequencing (~4-6 person-days) with a
+  checkpoint before any coupling. Scoping refined in
+  `planning/phase9-ws4-backend-spike.md` (P9.1: `ws4 validate` clean on
+  matrix+fragments ingest, crosswalk note incl. the 2903xxx AU question,
+  simulate smoke, wall/RSS recorded; P9.2: mirror the WS3 target set, measure
+  level reachability and iteration/scale numbers, state whether the WS3 level
+  is attainable), with the scale/candidate, soft-constraint, patch-criterion,
+  and inert-`--time-limit` risks recorded. New P9.5 topology/roads data
+  assessment issue (#45) added to the roadmap; issue bodies #40-#44 updated
+  to the refined scoping.
+- Kickoff: Phase 9 WS4 backend spike scoped on `feature/p9-ws4-backend` as a
+  decision-gated evaluation of swapping the WS3 wood-supply backend (and
+  possibly the custom principal/agent LPs) for WS4
+  (https://github.com/UBC-FRESH/ws4). Parent issue #40 with child issues
+  #41-#44; seed planning note `planning/phase9-ws4-backend-spike.md`. The
+  WS3-based pipeline (including the Phase 8 results) remains the reference
+  until the decision gate passes.
 - Phase 8 P8.4 (issue #37): the single-pass 100-year orchestrator,
   `planning_mode`/`burned_stock_reset` config surface, `single-pass-run` CLI,
   and ensemble dispatch.
