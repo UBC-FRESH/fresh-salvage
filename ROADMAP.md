@@ -17,7 +17,7 @@ synchronized with GitHub issues, planning notes, pull requests, and
 | P6 Validation, calibration, and documentation | TBD | `main` | Active (P6.2 docs in flight) |
 | P7 Sensitivity analysis and subsidy flip-point search | #3 | `version1.1(SensivityAnalysis&BinaryFlippingPoint)` | Active |
 | Grade Transition | #18 | `version1.2(GradeTransition)` | Active |
-| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Complete (P8.1-P8.6; pending review/PR) |
+| P8 Single-pass 100-year planning baseline | #33 | `feature/p8-single-pass-baseline` | Complete (P8.1-P8.6; merged via PR #46; #33 closed) |
 | P9 WS4 backend spike (decision-gated backend replacement evaluation) | #40 | `feature/p9-ws4-backend` | Active (spike; decision gate) |
 
 ## Phase 0: Skeleton Scaffold
@@ -240,7 +240,8 @@ Parent issue: #33
 Branch: `feature/p8-single-pass-baseline` (built on PR #32,
 `fix/schedule-group-volume-dedup`; `main` merged in after #32 merges)
 
-Status: complete (P8.1-P8.6; pending independent review and the PR to `main`)
+Status: complete (P8.1-P8.6; merged to `main` via PR #46, merge commit
+`dd26448`; parent issue #33 closed)
 
 Goal: add a first-class `single_pass` planning mode — the coupled WS3 ->
 principal -> agent -> fire pipeline solved once at t=0 over the full run
@@ -333,9 +334,12 @@ issue #20 and agent child issue #21. Completed execution steps are recorded in
 issues #22-#27. Principal fire and decay coefficient follow-up work is tracked
 in issue #28.
 
-Phase 8 (single-pass planning baseline, parent issue #33) is complete on
-`feature/p8-single-pass-baseline` (P8.1-P8.6; pending independent review and
-the PR to `main`); see the Phase 8 section above.
+Phase 8 (single-pass planning baseline, parent issue #33) is complete and
+merged to `main` via PR #46 (merge commit `dd26448`; parent issue #33
+closed); see the Phase 8 section above. The deferred P8 review minors
+(m1, m4, m5, m7) remain open as backlog, and the next roadmap item is the
+decision-gated Phase 9 WS4 backend spike (parent issue #40,
+`feature/p9-ws4-backend`).
 
 Phases 0-5 and P6.1 are complete on `main`; P6.2 (this documentation pass)
 is tracked separately from the active P7 branch. P7 records the sensitivity
