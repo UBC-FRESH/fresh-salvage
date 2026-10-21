@@ -28,7 +28,8 @@ planning_mode: single_pass
 # mimicking the rolling-horizon boundary (D4).
 burned_stock_reset: false
 max_age: 999
-workers: 64
+workers: 1
+subsidy_rate_per_m3: 24.1
 age_smashing:
   enabled: true
   width: 10
@@ -40,7 +41,7 @@ objective:
 aac_annual_m3: 2937509
 # decay_rate/discount_rate match the standalone principal/agent defaults; the
 # salvage subsidy rate itself (3.0 $/m3) is the shared data.py constant used
-# by both LPs.
+# by both LPs as default. 
 decay_rate: 0.85
 discount_rate: 0.03
 burned_limit_annual_m3: null
