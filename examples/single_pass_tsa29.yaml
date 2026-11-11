@@ -26,7 +26,7 @@ steps: 10
 planning_mode: single_pass
 # Optional (single pass only): drop the burned inventory at decade boundaries,
 # mimicking the rolling-horizon boundary (D4).
-burned_stock_reset: false
+burned_stock_reset: true
 max_age: 999
 workers: 1
 subsidy_rate_per_m3: 24.1
