@@ -686,6 +686,9 @@ class AgentRunConfig(BaseModel):
     ``default_offer_fraction`` applied to every cohort-year. ``decay_rate``
     is the annual retention of unsalvaged burned volume and
     ``discount_rate`` drives the NPV divisor ``(1 + discount_rate) ** year``.
+    ``seed_initial_burned`` (off by default) starts ``B[c,0]`` at the
+    principal's per-cohort burned basis (development-type
+    ``burn_share`` of standing volume) instead of zero.
     """
 
     run_id: str = "tsa29-agent"
@@ -696,6 +699,7 @@ class AgentRunConfig(BaseModel):
     decay_rate: float = 0.85
     discount_rate: float = 0.03
     default_offer_fraction: float = 1.0
+    seed_initial_burned: bool = False
     offers_path: Path | None = None
     economics: Economics = Field(default_factory=Economics)
     output_root: Path
@@ -1041,7 +1045,12 @@ class RHRunConfig(BaseModel):
     schedule-lineage age-lattice preconditions the P8.1 ceiling mapper
     enforces. ``burned_stock_reset`` (single pass only) drops the burned
     inventory at decade boundaries, mimicking the rolling-horizon boundary.
-    Both fields are flat, so either is a valid ensemble/sensitivity axis.
+    ``seed_initial_burned`` (off by default) starts the agent LP from the
+    principal's per-cohort burned basis (development-type ``burn_share`` of
+    standing volume) instead of ``B[c,0] = 0``; with ``burned_stock_reset`` it
+    is re-applied at every decade boundary exactly where the principal
+    re-seeds its burned path. All three fields are flat, so each is a valid
+    ensemble/sensitivity axis.
 
     The remaining economic surface (prices, harvest/transport costs,
     stumpage rates, burned price discount) is carried as FLAT fields —
@@ -1066,6 +1075,7 @@ class RHRunConfig(BaseModel):
     steps: int = 10
     planning_mode: Literal["rolling_horizon", "single_pass"] = "rolling_horizon"
     burned_stock_reset: bool = False
+    seed_initial_burned: bool = False
     max_age: int = 999
     workers: int = 64
     age_smashing: AgeSmashing = Field(default_factory=AgeSmashing)

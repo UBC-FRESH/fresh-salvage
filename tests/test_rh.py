@@ -52,6 +52,7 @@ def _advance(
     salvages: list[tuple[float, ...]] | None = None,
     period_length: int = 10,
     max_age: int = 200,
+    initial_burned: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     caps = rh.curve_age_caps(_curves(max_age), width=10, midpoint=5)
     return rh.advance_cohort_table(
@@ -62,6 +63,7 @@ def _advance(
         age_caps=caps,
         period_length=period_length,
         regeneration_age=5,
+        initial_burned=initial_burned,
     )
 
 
@@ -263,6 +265,35 @@ def test_advance_salvaged_area_regenerates() -> None:
     regen = float(new_state.loc[new_state["age"] == 5, "area_ha"].iloc[0])
     assert regen == pytest.approx(expected_regen, rel=1e-9)
     assert totals["area_salvaged_ha"] == pytest.approx(2.0, rel=1e-9)
+
+
+def test_advance_seeded_burned_inventory_allows_year_one_salvage() -> None:
+    state = _state([_row(65, 100.0)])
+    cohort_id = rh.cohort_record_id("managed", "2901000", STRATUM, CURVE_ID, 65)
+    harvest = tuple([0.0]) * 10
+    salvage = (0.2,) + tuple([0.0]) * 9
+
+    # Without the seed the replay has no on-hand stock in year 1.
+    with pytest.raises(rh.RHError) as excinfo:
+        _advance(state, [harvest], salvages=[salvage])
+    assert excinfo.value.code == "rh_fire_simulation_failed"
+
+    seeded_state, totals = _advance(
+        state,
+        [harvest],
+        salvages=[salvage],
+        initial_burned={cohort_id: 0.2},
+    )
+    unseeded_state, _ = _advance(state, [harvest])
+
+    # Salvage draws on the seeded stock, which is a volume stock: the area
+    # state (survivors plus regenerated burned area) is salvage-independent.
+    assert totals["area_salvaged_ha"] == pytest.approx(20.0)
+    pd.testing.assert_frame_equal(seeded_state, unseeded_state)
+
+    with pytest.raises(rh.RHError) as excinfo:
+        _advance(state, [harvest], salvages=[salvage], initial_burned={})
+    assert excinfo.value.code == "rh_initial_burned_missing"
 
 
 def test_advance_schedule_shape_mismatch_fails() -> None:

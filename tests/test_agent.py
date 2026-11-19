@@ -53,6 +53,7 @@ def _solve(
     period_length=None,
     grade_clock_period=None,
     burned_stock_reset=False,
+    seed_initial_burned=False,
 ):
     if offers is None:
         offers = agent.resolve_offers(cohorts, horizon=horizon)
@@ -66,6 +67,7 @@ def _solve(
         period_length=period_length,
         grade_clock_period=grade_clock_period,
         burned_stock_reset=burned_stock_reset,
+        seed_initial_burned=seed_initial_burned,
         run_id="toy",
     )
 
@@ -651,6 +653,8 @@ def test_load_cohorts_parses_toy_inputs(tmp_path) -> None:
         (805.0 * 127.0 + 92.0 * 146.0 + 103.0 * 55.0) / 1_000.0
     )
     assert cohort.burned_price_m3 == pytest.approx(127.0 * 0.65)
+    # The seed is the principal's burned basis: burn_share = 200 / 1,000.
+    assert cohort.initial_burned_fraction == pytest.approx(0.2)
 
 
 def test_load_cohorts_fails_fast_on_missing_inputs(tmp_path) -> None:
@@ -913,3 +917,138 @@ def test_growth_parameter_validation_fails_fast() -> None:
     with pytest.raises(agent.AgentError) as excinfo:
         agent.build_agent_lp([cohort], offers, horizon=4, burned_stock_reset=True)
     assert excinfo.value.code == "agent_invalid_burned_stock_reset"
+
+
+# --- initial burned seed (experiment A) -------------------------------------
+
+
+def _seed_cohort(cohort_id: str, *, fraction: float | None = 0.2) -> AgentCohort:
+    """Cohort with no live margin and no fire, so only the seed can be sold."""
+
+    return AgentCohort(
+        cohort_id=cohort_id,
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        standing_volume_m3=100.0,
+        burn_rate=0.0,
+        green_price_m3=0.0,
+        burned_price_m3=130.0,
+        initial_burned_fraction=fraction,
+    )
+
+
+def test_seed_initial_burned_lifts_salvage_in_year_one() -> None:
+    cohort = _seed_cohort("seeded")
+
+    unseeded = _solve([cohort], horizon=3)
+    seeded = _solve([cohort], horizon=3, seed_initial_burned=True)
+
+    assert [v.salvage_volume_m3 for v in unseeded.per_year_volumes] == pytest.approx(
+        [0.0, 0.0, 0.0]
+    )
+    assert unseeded.objective_value == pytest.approx(0.0)
+
+    # 0.2 of the 100 m3 standing volume is salvaged in year 1 at the ±margins;
+    # the stock is exhausted, so later years are zero.
+    assert [v.salvage_volume_m3 for v in seeded.per_year_volumes] == pytest.approx(
+        [20.0, 0.0, 0.0]
+    )
+    assert seeded.objective_value == pytest.approx(
+        (130.0 - 56.0 - 38.0 - 0.25 + 3.0) * 20.0 / 1.03
+    )
+
+
+def test_seed_reapplies_at_each_decade_under_burned_stock_reset() -> None:
+    cohort = _seed_cohort("reset-seed")
+
+    carried = _solve([cohort], horizon=4, period_length=2, seed_initial_burned=True)
+    reset = _solve(
+        [cohort],
+        horizon=4,
+        period_length=2,
+        burned_stock_reset=True,
+        seed_initial_burned=True,
+    )
+
+    # Without the reset the seed is sold once and the (empty) inventory is
+    # carried; with it the principal's decade-2 burned basis is re-applied.
+    assert [v.salvage_volume_m3 for v in carried.per_year_volumes] == pytest.approx(
+        [20.0, 0.0, 0.0, 0.0]
+    )
+    assert [v.salvage_volume_m3 for v in reset.per_year_volumes] == pytest.approx(
+        [20.0, 0.0, 20.0, 0.0]
+    )
+
+
+def test_seed_fails_fast_when_the_fraction_was_not_derived() -> None:
+    cohort = _seed_cohort("underived", fraction=None)
+
+    with pytest.raises(agent.AgentError) as excinfo:
+        _solve([cohort], horizon=2, seed_initial_burned=True)
+    assert excinfo.value.code == "agent_initial_burned_unavailable"
+
+    # The default path still runs: underived is only fatal when seeding.
+    assert _solve([cohort], horizon=2).objective_value == pytest.approx(0.0)
+
+    for bad in (-0.1, 1.5, float("nan")):
+        with pytest.raises(agent.AgentError) as excinfo:
+            _solve(
+                [dataclasses.replace(cohort, initial_burned_fraction=bad)],
+                horizon=2,
+                seed_initial_burned=True,
+            )
+        assert excinfo.value.code == "agent_initial_burned_invalid"
+
+
+def test_development_type_economics_matches_the_principal_burn_share() -> None:
+    from fresh_salvage import principal
+
+    stands = pd.DataFrame(
+        [
+            {
+                "development_type": "SPF_SBPS",
+                "Total_Green_Vol": 1_000.0,
+                "Total_Burned_Vol": 200.0,
+                **{column: 0.0 for column in data.GRADE_COLUMNS},
+                "SPF_Sawlog_Vol": 1_000.0,
+                **{column: 0.0 for column in data.BURNED_GRADE_COLUMNS},
+                "B_SPF_Sawlog_Vol": 200.0,
+            }
+        ]
+    )
+
+    assert agent._development_type_economics(stands)["SPF_SBPS"][
+        "burn_share"
+    ] == pytest.approx(0.2)
+    assert principal._development_type_economics(stands)["SPF_SBPS"][
+        "burn_share"
+    ] == pytest.approx(0.2)
+
+
+def test_seed_reapplies_in_each_decade_volume_units() -> None:
+    cohort = dataclasses.replace(
+        _growth_cohort(
+            "growth-seed",
+            per_ha=(100.0, 200.0),
+            burn_rate=0.0,
+            green_price_m3=0.0,
+            burned_price_m3=130.0,
+        ),
+        initial_burned_fraction=0.2,
+    )
+
+    result = _solve(
+        [cohort],
+        horizon=4,
+        period_length=2,
+        burned_stock_reset=True,
+        seed_initial_burned=True,
+    )
+
+    # Area 10 ha; the seed is 0.2 of each decade's per-ha volume, so the
+    # re-applied stock is 0.2 * 10 * 100 = 200 m3 in year 1 and
+    # 0.2 * 10 * 200 = 400 m3 in year 3 (the principal re-seeds v_k / v_0).
+    assert [v.salvage_volume_m3 for v in result.per_year_volumes] == pytest.approx(
+        [200.0, 0.0, 400.0, 0.0]
+    )

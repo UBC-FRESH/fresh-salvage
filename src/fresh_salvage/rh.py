@@ -63,6 +63,13 @@ representation on the WS3 side; (2) the 0.85 decay leaves under 20% of
 unsalvaged burned volume after 10 years, so the truncated tail is small;
 (3) within-step salvage is fully modeled by the agent LP.
 
+The opt-in ``seed_initial_burned`` config flag does NOT change this boundary
+rule. It only starts each step's agent LP (and its replay's salvage-feasibility
+check) from the same per-cohort burned stock the principal re-derives from live
+standing volume (``standing_volume_m3 * burn_share``), so the agent can realize
+the burned basis the principal LP already prices. The stock is still re-derived
+per step, never carried across steps.
+
 Other documented deviations from the predecessor
 ------------------------------------------------
 - No area/volume unit mixing: every capacity row in the coupled LPs is
@@ -271,6 +278,7 @@ def advance_cohort_table(
     period_length: int,
     regeneration_age: int,
     burn_rate_multiplier: float = 1.0,
+    initial_burned: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     """Advance the cohort table over one implemented step via fire dynamics.
 
@@ -279,7 +287,10 @@ def advance_cohort_table(
     volume; area fractions equal volume fractions inside an age-homogeneous
     cohort). ``burn_rate_multiplier`` scales every cohort's MFRI-derived
     annual burn rate (the ensemble fire-pattern axis); a scaled rate above
-    1.0 fails fast. Returns ``(new_state, totals)`` where the new table is
+    1.0 fails fast. ``initial_burned`` (optional, ``cohort_id ->`` fraction
+    of standing volume) seeds the replay's burned inventory with the same
+    per-cohort stock the agent LP was given; it must cover every state
+    cohort. Returns ``(new_state, totals)`` where the new table is
     re-aggregated over the state key and ``totals`` reports the step's
     burned/harvested/salvaged areas (ha). Area is conserved to 1e-6
     (relative) or the step fails fast.
@@ -330,6 +341,17 @@ def advance_cohort_table(
                 "rh_curve_age_cap_missing",
                 f"cohort {cohort_id!r} curve {row.curve_id} has no yield-curve age cap",
             )
+        if initial_burned is None:
+            seed = 0.0
+        else:
+            seed_value = initial_burned.get(cohort_id)
+            if seed_value is None:
+                raise RHError(
+                    "rh_initial_burned_missing",
+                    f"cohort {cohort_id!r} has no initial burned fraction but the "
+                    "replay was asked to seed burned inventory",
+                )
+            seed = float(seed_value)
         try:
             years = fire.simulate_cohort_years(
                 initial_live=1.0,
@@ -337,6 +359,7 @@ def advance_cohort_table(
                 harvest_schedule=harvest_schedule,
                 salvage_schedule=salvage_schedule,
                 decay_rate=decay_rate,
+                initial_burned=seed,
             )
         except fire.FireDynamicsError as exc:
             raise RHError(
@@ -346,19 +369,34 @@ def advance_cohort_table(
         live_end = years[-1].live_after
         harvested = sum(harvest_schedule)
         salvaged = sum(salvage_schedule)
-        unsalvaged_burned = 1.0 - live_end - harvested - salvaged
-        if abs(unsalvaged_burned) <= FRACTION_SNAP_TOLERANCE:
-            unsalvaged_burned = 0.0
-        elif unsalvaged_burned < 0:
-            raise RHError(
-                "rh_fraction_balance_failed",
-                f"cohort {cohort_id!r} fractions over-allocate the cohort: "
-                f"live_end {live_end} + harvested {harvested} + salvaged {salvaged} "
-                f"exceeds 1 by {-unsalvaged_burned}",
-            )
         area_ha = float(row.area_ha)
         surviving_area = area_ha * live_end
-        removed_area = area_ha * (harvested + salvaged + unsalvaged_burned)
+        if seed == 0.0:
+            unsalvaged_burned = 1.0 - live_end - harvested - salvaged
+            if abs(unsalvaged_burned) <= FRACTION_SNAP_TOLERANCE:
+                unsalvaged_burned = 0.0
+            elif unsalvaged_burned < 0:
+                raise RHError(
+                    "rh_fraction_balance_failed",
+                    f"cohort {cohort_id!r} fractions over-allocate the cohort: "
+                    f"live_end {live_end} + harvested {harvested} + salvaged "
+                    f"{salvaged} exceeds 1 by {-unsalvaged_burned}",
+                )
+            removed_area = area_ha * (harvested + salvaged + unsalvaged_burned)
+        else:
+            # The seed is a pre-existing burned volume stock, not extra area:
+            # area leaves the live pool through harvest and fire only, and
+            # the state table has no burned-area class. The next state is
+            # therefore the same function of live_end as the zero-seed path
+            # (harvested + salvaged + unsalvaged == 1 - live_end there), and
+            # salvage of the seed is bounded by the LP's sell-once row.
+            if harvested + salvaged > 1.0 + seed + FRACTION_SNAP_TOLERANCE:
+                raise RHError(
+                    "rh_fraction_balance_failed",
+                    f"cohort {cohort_id!r} sells {harvested + salvaged} of a "
+                    f"1 + {seed} standing-plus-seed basis",
+                )
+            removed_area = area_ha * (1.0 - live_end)
         if surviving_area > 0.0:
             rows.append(
                 (
@@ -736,6 +774,10 @@ def _run_step(
         offers = agent.resolve_offers(
             cohorts_a, horizon=config.period_length, offers_path=offers_path
         )
+        # Each step re-parses the replayed ARE state, so seeding the agent's
+        # B[c,0] here re-applies the principal's per-cohort burned basis
+        # (standing_volume_m3 * burn_share) at every rolling-horizon step,
+        # exactly where the principal's own burned path is re-seeded.
         agent_result = agent.solve_agent(
             cohorts_a,
             offers,
@@ -743,6 +785,7 @@ def _run_step(
             decay_rate=config.decay_rate,
             discount_rate=config.discount_rate,
             economics=economics,
+            seed_initial_burned=config.seed_initial_burned,
             run_id=f"{step_slug}-agent",
         )
         decisions_path = layout.data_path(f"{step_slug}-decisions", ext="parquet")
@@ -750,6 +793,14 @@ def _run_step(
             [decision.model_dump() for decision in agent_result.decisions]
         ).to_parquet(decisions_path, index=False)
         harvests, salvages = _fraction_schedules(state, agent_result)
+        # Mirror the agent's seeded burned inventory in the replay so the
+        # salvage feasibility check sees the same stock. The next state is
+        # salvage-independent, but the replay still validates the schedule.
+        initial_burned = (
+            {cohort.cohort_id: cohort.initial_burned_fraction for cohort in cohorts_a}
+            if config.seed_initial_burned
+            else None
+        )
         new_state, totals = advance_cohort_table(
             state,
             harvests=harvests,
@@ -759,6 +810,7 @@ def _run_step(
             period_length=config.period_length,
             regeneration_age=config.age_smashing.midpoint,
             burn_rate_multiplier=config.burn_rate_multiplier,
+            initial_burned=initial_burned,
         )
     except RHError:
         raise

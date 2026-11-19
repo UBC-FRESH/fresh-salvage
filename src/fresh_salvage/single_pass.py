@@ -24,7 +24,10 @@ re-planning is compared against (planning decisions D1-D9 in
    LP runs over ``steps * period_length`` years with the grade clock
    ``period_length`` (D5) and the configured burned-stock semantics (D4/D6),
    writes the run-level offers, and the agent LP runs against those offers over
-   the same horizon;
+   the same horizon. The opt-in ``seed_initial_burned`` flag starts the agent's
+   ``B[c,0]`` at the same per-cohort ``burn_share * standing`` basis the
+   principal uses (once at t=0, or again at every decade boundary under
+   ``burned_stock_reset``); it is off by default;
 4. :func:`replay_lineage` walks the agent's annual H/S fractions decade by
    decade through :func:`fresh_salvage.fire.simulate_cohort_years`, aging
    survivors and regenerating everything that leaves the live pool. The
@@ -688,6 +691,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
             period_length=config.period_length,
             grade_clock_period=config.period_length,
             burned_stock_reset=config.burned_stock_reset,
+            seed_initial_burned=config.seed_initial_burned,
             run_id=f"{run_slug}-agent",
         )
         pd.DataFrame(

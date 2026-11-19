@@ -117,9 +117,18 @@ decision variables:
 - ``burned_stock_reset`` zeroes the carried ``B[t-1]`` coefficient at every
   decade boundary, dropping the inventory exactly as the rolling-horizon
   boundary does (D4, ``rh.py`` "Burned-stock boundary").
+- ``seed_initial_burned`` (off by default) replaces the ``B[c,0] = 0`` initial
+  condition with ``AgentCohort.initial_burned_fraction``, the same
+  ``burn_share * standing`` stock the principal seeds its predetermined burned
+  path with. With ``burned_stock_reset`` the seed is re-applied at every
+  decade boundary, mirroring the principal's per-decade re-seed; without the
+  reset it is applied once at t=0 and the inventory is carried/decayed by the
+  ``B`` balance. The default (no seed) leaves the rolling-horizon LP
+  bit-identical.
 
-With the defaults, or with a horizon of at most one decade, all three
-reduce bit-exactly to the rolling-horizon LP (equivalence tests).
+With the defaults, or with a horizon of at most one decade, both flags off
+and the static path, the LP reduces bit-exactly to the rolling-horizon LP
+(equivalence tests).
 """
 
 from __future__ import annotations
@@ -196,6 +205,15 @@ class AgentCohort:
     ``age0 + period_length*k`` (see
     :func:`fresh_salvage.principal.decadal_per_ha_volumes`). ``None`` keeps
     the static t=0 volumes of the rolling-horizon path.
+
+    ``initial_burned_fraction`` is the optional initial burned inventory
+    expressed in the agent LP's own normalization: a fraction of the cohort's
+    t=0 standing volume (``burned_volume_m3 / standing_volume_m3``, which
+    equals the development type's ingestion ``burn_share``). It is derived at
+    the boundary so it matches the principal's per-cohort seeded burned basis
+    exactly. ``None`` means "not derived" and only affects
+    ``build_agent_lp(seed_initial_burned=True)``, which fails fast rather than
+    silently seeding zero.
     """
 
     cohort_id: str
@@ -209,6 +227,7 @@ class AgentCohort:
     burned_grade_mix: tuple[float, ...] | None = None
     burned_grade_prices: tuple[float, ...] | None = None
     decadal_volume_scale: tuple[float, ...] | None = None
+    initial_burned_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -327,6 +346,7 @@ def build_agent_lp(
     period_length: int | None = None,
     grade_clock_period: int | None = None,
     burned_stock_reset: bool = False,
+    seed_initial_burned: bool = False,
 ) -> AgentLP:
     """Build the continuous agent harvest/salvage LP as a HiGHS model.
 
@@ -343,6 +363,17 @@ def build_agent_lp(
     ``year % period`` (D5; ``None`` keeps the LP-year index, the
     rolling-horizon default). ``burned_stock_reset`` drops the carried
     burned inventory at every decade boundary (D4), mimicking ``rh-run``.
+
+    ``seed_initial_burned`` initializes ``B[c,0]`` with
+    ``AgentCohort.initial_burned_fraction`` instead of zero. The fraction is
+    the principal's per-cohort ``burned_volume_m3 / green_volume_m3`` (the
+    development type's ingestion ``burn_share``), so both LPs start from the
+    same burned stock. Under ``burned_stock_reset`` the seed is re-applied at
+    every decade boundary (the principal re-seeds its burned path there);
+    without the reset it is applied once at t=0 and the ``B`` balance carries
+    and decays it. A cohort without a derived fraction fails fast with
+    ``agent_initial_burned_unavailable`` rather than silently seeding zero.
+
     With the defaults, or with a horizon of at most one decade, the LP is
     bit-identical to the rolling-horizon LP (equivalence tests).
     """
@@ -391,6 +422,11 @@ def build_agent_lp(
             "agent_invalid_burned_stock_reset",
             "burned_stock_reset requires period_length",
         )
+    initial_burned = (
+        [_initial_burned_fraction(cohort) for cohort in cohorts]
+        if seed_initial_burned
+        else None
+    )
 
     cohort_count = len(cohorts)
     block = cohort_count * horizon
@@ -449,18 +485,21 @@ def build_agent_lp(
         survival = 1.0 - rate
         base = c_index * horizon
         per_ha = _decadal_scale_array(cohort, horizon, period_length)
+        seed = initial_burned[c_index] if initial_burned is not None else 0.0
         for year in range(horizon):
             harvest_col = harvest_offset + base + year
             salvage_col = salvage_offset + base + year
             live_col = live_offset + base + year
             burned_col = burned_offset + base + year
             if year == 0:
-                # Initial conditions V[c,0] = 1 and B[c,0] = 0 fold into the
-                # right-hand sides via the fire.py dynamics primitives.
+                # Initial conditions V[c,0] = 1 and B[c,0] = seed fold into
+                # the right-hand sides via the fire.py dynamics primitives.
                 influx0 = fire.burn_influx(1.0, rate)
                 live_rhs = fire.live_volume_after(1.0, 0.0, influx0)
-                burned_rhs = fire.burned_volume_after(0.0, influx0, 0.0, decay_rate)
-                salvage_rhs = fire.salvageable_volume(0.0, influx0)
+                burned_rhs = fire.burned_volume_after(
+                    seed, influx0, 0.0, decay_rate
+                )
+                salvage_rhs = fire.salvageable_volume(seed, influx0)
                 model.addRow(
                     live_rhs,
                     live_rhs,
@@ -496,6 +535,16 @@ def build_agent_lp(
                 period_length,
                 burned_stock_reset=burned_stock_reset,
             )
+            # Under the reset the principal re-seeds its burned path with
+            # burned_volume_m3 * v_k / v_0 at every decade boundary, i.e. the
+            # same per-ha fraction as the t=0 seed; re-apply it here.
+            reseed = (
+                seed
+                if seed_initial_burned
+                and burned_stock_reset
+                and year % period_length == 0
+                else 0.0
+            )
             # V[c,t] - (1 - R) * V[c,t-1] + (1 - R) * H[c,t] = 0
             model.addRow(
                 0.0,
@@ -504,10 +553,12 @@ def build_agent_lp(
                 np.array([live_col, previous_live_col, harvest_col], dtype=np.int32),
                 np.array([1.0, -survival, survival]),
             )
-            # B[c,t] - d*r*B[c,t-1] - d*R*V[c,t-1] + d*R*H[c,t] + d*S[c,t] = 0
+            # B[c,t] - d*r*B[c,t-1] - d*R*V[c,t-1] + d*R*H[c,t] + d*S[c,t]
+            #     = d * reseed
+            burned_rhs = decay_rate * reseed
             model.addRow(
-                0.0,
-                0.0,
+                burned_rhs,
+                burned_rhs,
                 5,
                 np.array(
                     [
@@ -529,10 +580,10 @@ def build_agent_lp(
                     ]
                 ),
             )
-            # S[c,t] - r*B[c,t-1] - R*V[c,t-1] + R*H[c,t] <= 0
+            # S[c,t] - r*B[c,t-1] - R*V[c,t-1] + R*H[c,t] <= reseed
             model.addRow(
                 -highspy.kHighsInf,
-                0.0,
+                reseed,
                 4,
                 np.array(
                     [salvage_col, previous_burned_col, previous_live_col, harvest_col],
@@ -560,6 +611,35 @@ def build_agent_lp(
         horizon=horizon,
         objective_coefficients=costs,
     )
+
+
+def _initial_burned_fraction(cohort: AgentCohort) -> float:
+    """Return the cohort's trusted t=0 burned fraction of standing volume.
+
+    Boundary parser for ``seed_initial_burned``: the fraction is derived in
+    :func:`_parse_are_cohorts` from the same development-type ``burn_share``
+    the principal applies (``burned_volume_m3 / green_volume_m3``). A cohort
+    built without that derivation carries ``None`` and fails fast here rather
+    than silently seeding zero; a non-finite, negative, or above-one fraction
+    is a boundary defect.
+    """
+
+    value = cohort.initial_burned_fraction
+    if value is None:
+        raise AgentError(
+            "agent_initial_burned_unavailable",
+            f"cohort {cohort.cohort_id!r} carries no initial burned fraction; "
+            "seed_initial_burned requires cohorts derived by "
+            "agent._parse_are_cohorts from a stands table with burned volumes",
+        )
+    fraction = float(value)
+    if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise AgentError(
+            "agent_initial_burned_invalid",
+            f"cohort {cohort.cohort_id!r} has initial burned fraction {fraction}, "
+            "outside [0, 1]",
+        )
+    return fraction
 
 
 def _decadal_scale_array(
@@ -769,15 +849,17 @@ def solve_agent(
     period_length: int | None = None,
     grade_clock_period: int | None = None,
     burned_stock_reset: bool = False,
+    seed_initial_burned: bool = False,
     run_id: str = "agent-solve",
 ) -> AgentResult:
     """Build and solve the agent LP; return the typed result.
 
     Raises ``AgentError`` when the solve does not reach optimal status.
     Decision rows are emitted for every (cohort, year) pair, zeros included.
-    ``period_length``/``grade_clock_period``/``burned_stock_reset`` are the
-    Phase 8 single-pass switches of :func:`build_agent_lp`; with the defaults
-    the reported per-year volumes are the static t=0 volumes.
+    ``period_length``/``grade_clock_period``/``burned_stock_reset``/
+    ``seed_initial_burned`` are the Phase 8 switches of
+    :func:`build_agent_lp`; with the defaults the reported per-year volumes
+    are the static t=0 volumes and the initial burned inventory is zero.
     """
 
     built = build_agent_lp(
@@ -790,6 +872,7 @@ def solve_agent(
         period_length=period_length,
         grade_clock_period=grade_clock_period,
         burned_stock_reset=burned_stock_reset,
+        seed_initial_burned=seed_initial_burned,
     )
     solve_started = time.monotonic()
     built.model.run()
@@ -986,6 +1069,7 @@ def run_agent(config: AgentRunConfig) -> AgentResult:
         decay_rate=config.decay_rate,
         discount_rate=config.discount_rate,
         economics=config.economics,
+        seed_initial_burned=config.seed_initial_burned,
         run_id=config.run_id,
     )
 
@@ -1065,12 +1149,15 @@ def _development_type_economics(
 ) -> dict[str, dict[str, object]]:
     """Aggregate the stands table into per-development-type prices.
 
-    Returns ``{development_type: {"green_price": ..., "burned_price": ...}}``
-    with volume-weighted average grade prices ($/m3) over the green and
-    burned grade columns. ``green_prices``/``burned_price_discount`` are the
-    configured price surface (defaults: the calibrated ``data.py``
-    constants); burned prices are derived as green x discount, matching
-    ``data.BURNED_PRICES``.
+    Returns ``{development_type: {"green_price": ..., "burned_price": ...,
+    "burn_share": ...}}`` with volume-weighted average grade prices ($/m3)
+    over the green and burned grade columns. ``green_prices``/
+    ``burned_price_discount`` are the configured price surface (defaults: the
+    calibrated ``data.py`` constants); burned prices are derived as green x
+    discount, matching ``data.BURNED_PRICES``. ``burn_share`` is
+    ``Total_Burned_Vol / Total_Green_Vol``, the same ratio
+    :func:`fresh_salvage.principal._development_type_economics` derives; it
+    seeds the optional agent initial burned inventory.
     """
 
     if green_prices is None:
@@ -1136,6 +1223,7 @@ def _development_type_economics(
         )
         economics[str(development_type)] = {
             "green_price": green_value / green,
+            "burn_share": burned / green,
             "burned_price": burned_value / burned if burned > 0.0 else 0.0,
             "burned_grade_mix": grade_mix,
             "burned_grade_prices": grade_prices,
@@ -1265,6 +1353,22 @@ def _parse_are_cohorts(
                 f"(multiplier {burn_rate_multiplier}) exceeds 1.0",
             )
         standing_volume_m3 = area_ha * _curve_volume_m3_per_ha(curves, curve_id, age)
+        # The principal seeds its per-cohort burned path with
+        # ``standing_volume_m3 * burn_share``; express the same stock in this
+        # LP's fraction-of-standing-volume units. A zero-volume cohort carries
+        # no burned volume in the principal either (0 * share), so its
+        # fraction is 0. Missing burn_share leaves the seed underived (None)
+        # and only the seed flag fails fast on it.
+        burn_share = price_by_dt[development_type].get("burn_share")
+        if burn_share is None:
+            initial_burned_fraction = None
+        else:
+            burned_volume_m3 = standing_volume_m3 * float(burn_share)
+            initial_burned_fraction = (
+                burned_volume_m3 / standing_volume_m3
+                if standing_volume_m3 > 0.0
+                else 0.0
+            )
         cohorts.append(
             AgentCohort(
                 cohort_id=f"{ifm}:{au_id}:{stratum_code}:{curve_id}:{age}",
@@ -1277,6 +1381,7 @@ def _parse_are_cohorts(
                 burned_price_m3=price_by_dt[development_type]["burned_price"],
                 burned_grade_mix=price_by_dt[development_type]["burned_grade_mix"],
                 burned_grade_prices=price_by_dt[development_type]["burned_grade_prices"],
+                initial_burned_fraction=initial_burned_fraction,
             )
         )
     if not cohorts:
