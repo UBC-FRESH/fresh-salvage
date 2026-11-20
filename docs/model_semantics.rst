@@ -404,15 +404,41 @@ realizations, which are out of scope.
 and period-0 inventory injection as rolling horizon and builds the same
 ``horizon``-period WS3 problem ``rh-run`` solves at step 1 (D1); only
 periods ``1..steps`` are implemented. The one schedule is mapped back onto
-the t=0 cohorts by ``rh.schedule_cohort_period_volumes`` — a WS3 harvest of
-a regenerated stand inside the implemented periods fails fast (D3; the LP
-cohort set is the t=0 inventory) — and ``rh.annual_ceiling_matrix`` splits
-each period's harvest uniformly into annual per-cohort ceilings. One
-principal LP and one agent LP then cover ``steps x period_length`` years at
-1-year timesteps against those ceilings and offers, and the run ends with
-the 100-year lineage replay below. Because the one solve must cover every
-implemented period, ``planning_mode: single_pass`` requires
-``horizon >= steps``.
+the t=0 cohorts by ``rh.schedule_period_volumes``: initial-lineage rows map
+to the t=0 inventory, and regeneration-lattice rows become explicit
+single-period regenerated cohorts (below), never silently dropped.
+``rh.annual_ceiling_matrix`` splits each period's harvest uniformly into
+annual per-cohort ceilings. One principal LP and one agent LP then cover
+``steps x period_length`` years at 1-year timesteps against those ceilings
+and offers, and the run ends with the 100-year lineage replay below. Because
+the one solve must cover every implemented period,
+``planning_mode: single_pass`` requires ``horizon >= steps``.
+
+**Regenerated cohorts (extends D3).** The Phase 8 D3 contract excluded
+regenerated stands from the LP cohort set and failed fast if WS3 harvested
+one inside the implemented periods. The corrected TSA29 land base makes that
+happen (period 9: 97 rows / 9,856,940 m3), so single pass now represents
+each ``(dtype_key, period, age)`` regeneration-lattice group as one explicit
+``rh.RegeneratedCohortSpec``. Its ``area_ha`` is the summed WS3 row area,
+its green/standing volume is the group's raw scheduled ``totvol`` (the same
+pre-utilization basis as the initial-lineage ceilings), its birth period is
+``b = period - age / period_length``, and its availability year is
+``(period - 1) * period_length``. The LP cohort carries no burned volume and
+no burn rate (the scheduled block is a green-harvest opportunity only), and
+a constant decadal per-ha scale equal to the scheduled volume / area. The
+per-year ceiling matrix is zero outside the scheduled period, so the
+principal offer and agent ``H``/``S`` variables are zero before and after it
+and the LP cannot shift the regen harvest outside the WS3 schedule. The
+cohort is not added to the replayed state; in its scheduled decade the agent
+``H`` fractions (times the scheduled area) are applied as a harvest event to
+the active descendants of the same dtype and birth (last clear-cut)
+period,
+proportional to live area. The event removes area from the live pool and
+regenerates it at the boundary, so the parent area is never double-counted.
+A claim larger than the matching live pool fails fast with
+``single_pass_regen_area_unavailable``. The construction is recorded in the
+manifest as the ``single_pass_regenerated_cohorts`` diagnostic (cohort ids,
+area, scheduled volume, periods).
 
 **Decadal growth-aware volume coefficients (D2).** The single-pass LPs are
 given each t=0 cohort's per-ha volume at the *unclamped* decadal age
@@ -497,17 +523,18 @@ decade (green harvest plus burn influx; salvage only reclassifies burned
 area) regenerates as a regen sub-cohort in the same development type at
 ``age_smashing.midpoint`` — the convention ``rh.advance_cohort_table`` uses.
 Survivors age by ``+period_length`` clamped to the curve age cap; regen
-sub-cohorts age by ``+period_length`` per decade (clamped), are never
-harvested (D3), stay exposed to fire, and any burned share regenerates
-again at the next boundary. Zero-harvest regen trajectories are memoized
-per distinct burn rate with the identical float operations, so the
-optimization is bit-identical to re-simulating each lineage. Area is
-conserved to 1e-6 relative at every boundary; one state snapshot is written
-per boundary (``derived/rh_state/step_{k:02d}.are`` for ``k = 0..steps``),
-and ``final-state.csv`` is the last snapshot. (RH regenerates removed area
-at the same midpoint age while WS3 itself places clear-cut area at age 0;
-the replay mirrors RH — the WS3 t=0 solve only notices after period
-``steps``.)
+sub-cohorts age by ``+period_length`` per decade (clamped) and stay exposed
+to fire, and any burned share regenerates again at the next boundary. Regen
+sub-cohorts carry no t=0 schedule; an explicit regenerated cohort's harvest
+is applied as an event on the matching origin pool (above), and all other
+regen trajectories are memoized per distinct burn rate with the identical
+float operations, so the optimization is bit-identical to re-simulating each
+lineage. Area is conserved to 1e-6 relative at every boundary; one state
+snapshot is written per boundary (``derived/rh_state/step_{k:02d}.are`` for
+``k = 0..steps``), and ``final-state.csv`` is the last snapshot. (RH
+regenerates removed area at the same midpoint age while WS3 itself places
+clear-cut area at age 0; the replay mirrors RH — the WS3 t=0 solve only
+notices after period ``steps``.)
 
 **Decade records and the manifest (D7/D8).** A single-pass run emits
 ``steps`` ``RHStepRecord`` lines in ``data/<run>-steps.jsonl``, the same
@@ -753,11 +780,14 @@ Known Limitations
   principal/agent objectives and the base-year manifest totals; the summed
   WS3 objective is not comparable across modes, because single pass solves
   the WS3 problem once while rolling horizon solves once per decade (D8).
-- **Single-pass regenerated stands are replayed, not re-optimized.** The
-  single-pass LP cohort set is the t=0 inventory; area that regenerates
-  during the run is replayed and stays exposed to fire, but is never
-  harvested, and a WS3 harvest of an in-horizon regenerated stand fails
-  fast (D3).
+- **Single-pass regenerated harvests are single-period LP cohorts.** A WS3
+  regeneration-lattice harvest inside the implemented periods becomes an
+  explicit cohort whose area/volume are the WS3 scheduled block, available
+  only in that scheduled period (zero ceilings elsewhere). It carries no
+  burned volume or burn rate; the replay applies its harvest as an event on
+  the matching origin regen pool, so the area is not re-optimized beyond
+  the scheduled period and is never double-counted. A claim larger than the
+  matching live pool fails fast (``single_pass_regen_area_unavailable``).
 - **WS3 workers numerics.** WS3 step objectives shift slightly with the
   configured worker count (±0.014% observed); hold ``workers`` fixed for
   cross-run comparisons.

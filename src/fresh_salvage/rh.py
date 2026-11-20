@@ -87,6 +87,7 @@ import json
 import math
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -833,6 +834,233 @@ def _period1_cohort_volumes(
     return volumes
 
 
+@dataclass(frozen=True)
+class RegeneratedCohortSpec:
+    """One explicit regenerated cohort built from a WS3 regen-harvest group.
+
+    ``area_ha``/``volume_m3`` are the summed WS3 schedule row area (ha) and
+    raw harvest volume (m3, the ``_compile_schedule`` ``totvol`` basis before
+    the utilization factor) of one ``(dtype_key, period, age)`` dedup group.
+    ``volume_m3`` is therefore the same basis as the initial-lineage ceilings
+    (``_period1_cohort_volumes``): an LP green-volume coefficient of
+    ``volume_m3`` and a ceiling of ``volume_m3`` make ``offer = 1`` harvest
+    exactly the scheduled volume.
+
+    ``birth_period`` is ``period - (age - WS3_HARVEST_RESET_AGE) /
+    period_length``: the WS3 period whose clear-cut created the stand.
+    ``availability_year`` is ``(period - 1) * period_length``, the zero-based
+    first year of the scheduled period. The cohort is only harvestable inside
+    that period; ``period_volumes`` carries the volume at ``period - 1`` and
+    zero elsewhere, so :func:`annual_ceiling_matrix` makes every other year's
+    ceiling zero.
+    """
+
+    cohort_id: str
+    tsa: str
+    ifm: str
+    au_id: str
+    stratum_code: str
+    curve_id: int
+    period: int
+    age: int
+    birth_period: int
+    availability_year: int
+    area_ha: float
+    volume_m3: float
+    period_volumes: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class SchedulePeriodVolumes:
+    """Initial-lineage and regenerated-cohort volumes of one WS3 schedule.
+
+    ``initial`` maps every t=0 state cohort id to its per-implemented-period
+    volume (all zeros when unharvested), exactly as
+    :func:`schedule_cohort_period_volumes` returns. ``regenerated`` holds one
+    spec per ``(dtype_key, period, age)`` regeneration-lattice group, in
+    deterministic schedule order.
+    """
+
+    initial: dict[str, tuple[float, ...]]
+    regenerated: tuple[RegeneratedCohortSpec, ...]
+
+
+def schedule_period_volumes(
+    schedule: pd.DataFrame,
+    action_code: str,
+    state: pd.DataFrame,
+    *,
+    implemented_periods: int,
+    period_length: int,
+    age_smashing: AgeSmashing,
+) -> SchedulePeriodVolumes:
+    """Map WS3 harvest rows onto initial cohorts and explicit regen cohorts.
+
+    Initial-lineage rows are mapped exactly as
+    :func:`schedule_cohort_period_volumes` does. Regeneration-lattice rows
+    (``age = WS3_HARVEST_RESET_AGE mod period_length``) are grouped by
+    ``(dtype_key, period, age)`` into one :class:`RegeneratedCohortSpec` per
+    group, summing the group's row areas and volumes (the same PR #32 dedup
+    convention the initial-lineage mapper uses). The birth period is
+    ``period - (age - WS3_HARVEST_RESET_AGE) / period_length``; a row whose
+    implied birth is not an earlier implemented period fails fast rather than
+    being dropped. Rows beyond ``implemented_periods``, zero-area rows, and
+    non-``action_code`` rows are ignored.
+    """
+
+    if period_length <= 0:
+        raise RHError(
+            "rh_invalid_period_length",
+            f"period_length must be positive: {period_length}",
+        )
+    if implemented_periods <= 0:
+        raise RHError(
+            "rh_invalid_implemented_periods",
+            f"implemented_periods must be positive: {implemented_periods}",
+        )
+    _require_disjoint_age_lattices(period_length, age_smashing)
+    _require_state_on_midpoint_lattice(state, age_smashing)
+
+    volumes: dict[str, list[float]] = {
+        cohort_record_id(
+            row.ifm, row.au_id, row.stratum_code, int(row.curve_id), int(row.age)
+        ): [0.0] * implemented_periods
+        for row in state.itertuples(index=False)
+    }
+    regen_groups: dict[tuple[str, int, int], dict[str, object]] = {}
+    harvest_rows = schedule[
+        (schedule["period"] <= implemented_periods)
+        & (schedule["harvest_action"] == action_code)
+    ]
+    for row in harvest_rows.itertuples(index=False):
+        period = int(row.period)
+        age = int(row.age_class)
+        area = float(row.area_ha)
+        volume = float(row.volume_m3)
+        if not math.isfinite(area) or area < 0.0:
+            raise RHError(
+                "rh_schedule_area_invalid",
+                f"WS3 period-{period} {action_code!r} row at age {age} carries "
+                f"invalid area {row.area_ha!r}",
+            )
+        if area == 0.0:
+            continue
+        if not math.isfinite(volume) or volume < 0.0:
+            raise RHError(
+                "rh_schedule_volume_invalid",
+                f"WS3 period-{period} {action_code!r} row at age {age} carries "
+                f"invalid volume {row.volume_m3!r}",
+            )
+        tsa, ifm, au_id, stratum_code, curve_id = _schedule_dtype_parts(row.dtype_key)
+        initial_age = age - period_length * (period - 1)
+        row_context = (
+            f"WS3 period-{period} {action_code!r} row for development type "
+            f"{row.dtype_key} at age {age}"
+        )
+        if _is_initial_lineage_age(initial_age, age_smashing):
+            cohort_id = cohort_record_id(
+                ifm, au_id, stratum_code, curve_id, initial_age
+            )
+            period_volumes = volumes.get(cohort_id)
+            if period_volumes is None:
+                raise RHError(
+                    "rh_schedule_unknown_cohort",
+                    f"{row_context} maps to t=0 cohort {cohort_id!r}, which is "
+                    "absent from the injected state table",
+                )
+            period_volumes[period - 1] += volume
+            continue
+        if not _is_regenerated_age(age, period_length):
+            raise RHError(
+                "rh_schedule_off_lattice",
+                f"{row_context} lies on neither the initial-inventory midpoint "
+                f"lattice (implied t=0 age {initial_age}) nor the regeneration "
+                "lattice",
+            )
+        age_offset = age - WS3_HARVEST_RESET_AGE
+        birth_period = period - age_offset // period_length
+        if birth_period < 1 or birth_period >= period:
+            raise RHError(
+                "rh_schedule_regenerated_birth_invalid",
+                f"{row_context} implies birth period {birth_period}; a "
+                "regenerated harvest needs an earlier implemented period "
+                f"(got period {period}, age {age})",
+            )
+        group = regen_groups.get((row.dtype_key, period, age))
+        if group is None:
+            group = {
+                "tsa": tsa,
+                "ifm": ifm,
+                "au_id": au_id,
+                "stratum_code": stratum_code,
+                "curve_id": curve_id,
+                "birth_period": birth_period,
+                "area_ha": 0.0,
+                "volume_m3": 0.0,
+            }
+            regen_groups[(row.dtype_key, period, age)] = group
+        group["area_ha"] = float(group["area_ha"]) + area
+        group["volume_m3"] = float(group["volume_m3"]) + volume
+
+    regenerated: list[RegeneratedCohortSpec] = []
+    for (dtype_key, period, age), group in regen_groups.items():
+        area_ha = float(group["area_ha"])
+        volume_m3 = float(group["volume_m3"])
+        birth_period = int(group["birth_period"])
+        if not math.isfinite(area_ha) or area_ha <= 0.0:
+            raise RHError(
+                "rh_schedule_regenerated_area_invalid",
+                f"regenerated cohort group {dtype_key} period {period} age {age} "
+                f"has non-positive or non-finite area {area_ha}",
+            )
+        if not math.isfinite(volume_m3) or volume_m3 < 0.0:
+            raise RHError(
+                "rh_schedule_regenerated_volume_invalid",
+                f"regenerated cohort group {dtype_key} period {period} age {age} "
+                f"has negative or non-finite volume {volume_m3}",
+            )
+        cohort_id = (
+            f"regen:{group['ifm']}:{group['au_id']}:{group['stratum_code']}:"
+            f"{group['curve_id']}:b{birth_period}:a{age}"
+        )
+        regenerated.append(
+            RegeneratedCohortSpec(
+                cohort_id=cohort_id,
+                tsa=str(group["tsa"]),
+                ifm=str(group["ifm"]),
+                au_id=str(group["au_id"]),
+                stratum_code=str(group["stratum_code"]),
+                curve_id=int(group["curve_id"]),
+                period=period,
+                age=age,
+                birth_period=birth_period,
+                availability_year=(period - 1) * period_length,
+                area_ha=area_ha,
+                volume_m3=volume_m3,
+                period_volumes=tuple(
+                    volume_m3 if index == period - 1 else 0.0
+                    for index in range(implemented_periods)
+                ),
+            )
+        )
+    regenerated.sort(
+        key=lambda spec: (
+            spec.period,
+            spec.tsa,
+            spec.ifm,
+            spec.au_id,
+            spec.stratum_code,
+            spec.curve_id,
+            spec.age,
+            spec.cohort_id,
+        )
+    )
+    return SchedulePeriodVolumes(
+        initial={cohort_id: tuple(values) for cohort_id, values in volumes.items()},
+        regenerated=tuple(regenerated),
+    )
+
+
 def schedule_cohort_period_volumes(
     schedule: pd.DataFrame,
     action_code: str,
@@ -856,71 +1084,37 @@ def schedule_cohort_period_volumes(
     t=0 cohort of age ``a0 = a - period_length * (p - 1)``, which lies on the
     age-smashing midpoint lattice. Clear-cut resets age to
     ``WS3_HARVEST_RESET_AGE``, so regenerated stands sit on the
-    ``WS3_HARVEST_RESET_AGE (mod period_length)`` lattice. A harvest of a
-    regenerated stand fails fast with ``rh_schedule_regenerated_harvest``
-    (regenerated stands are not LP cohorts); a row on neither lattice fails
-    with ``rh_schedule_off_lattice`` and an initial-lineage row without a
-    state cohort with ``rh_schedule_unknown_cohort``.
+    ``WS3_HARVEST_RESET_AGE (mod period_length)`` lattice. This strict mapper
+    keeps the Phase 8 D3 contract: a harvest of a regenerated stand fails fast
+    with ``rh_schedule_regenerated_harvest`` (use
+    :func:`schedule_period_volumes` to represent it instead); a row on neither
+    lattice fails with ``rh_schedule_off_lattice`` and an initial-lineage row
+    without a state cohort with ``rh_schedule_unknown_cohort``.
     """
 
-    if period_length <= 0:
-        raise RHError(
-            "rh_invalid_period_length",
-            f"period_length must be positive: {period_length}",
+    mapping = schedule_period_volumes(
+        schedule,
+        action_code,
+        state,
+        implemented_periods=implemented_periods,
+        period_length=period_length,
+        age_smashing=age_smashing,
+    )
+    if mapping.regenerated:
+        spec = mapping.regenerated[0]
+        dtype_key = json.dumps(
+            [spec.tsa, spec.ifm, spec.au_id, spec.stratum_code, str(spec.curve_id)]
         )
-    if implemented_periods <= 0:
         raise RHError(
-            "rh_invalid_implemented_periods",
-            f"implemented_periods must be positive: {implemented_periods}",
+            "rh_schedule_regenerated_harvest",
+            f"WS3 period-{spec.period} {action_code!r} row for development type "
+            f"{dtype_key} at age {spec.age} harvests a stand regenerated inside "
+            f"the implemented periods (age on the {WS3_HARVEST_RESET_AGE} mod "
+            f"{period_length} regeneration lattice); regenerated stands are not "
+            "LP cohorts",
         )
-    _require_disjoint_age_lattices(period_length, age_smashing)
-    _require_state_on_midpoint_lattice(state, age_smashing)
+    return mapping.initial
 
-    volumes: dict[str, list[float]] = {
-        cohort_record_id(
-            row.ifm, row.au_id, row.stratum_code, int(row.curve_id), int(row.age)
-        ): [0.0] * implemented_periods
-        for row in state.itertuples(index=False)
-    }
-    harvest_rows = schedule[
-        (schedule["period"] <= implemented_periods)
-        & (schedule["harvest_action"] == action_code)
-        & (schedule["area_ha"] > 0.0)
-    ]
-    for row in harvest_rows.itertuples(index=False):
-        period = int(row.period)
-        age = int(row.age_class)
-        ifm, au_id, stratum_code, curve_id = _schedule_dtype_identity(row.dtype_key)
-        initial_age = age - period_length * (period - 1)
-        row_context = (
-            f"WS3 period-{period} {action_code!r} row for development type "
-            f"{row.dtype_key} at age {age}"
-        )
-        if not _is_initial_lineage_age(initial_age, age_smashing):
-            if _is_regenerated_age(age, period_length):
-                raise RHError(
-                    "rh_schedule_regenerated_harvest",
-                    f"{row_context} harvests a stand regenerated inside the "
-                    f"implemented periods (age on the {WS3_HARVEST_RESET_AGE} "
-                    f"mod {period_length} regeneration lattice); regenerated "
-                    "stands are not LP cohorts",
-                )
-            raise RHError(
-                "rh_schedule_off_lattice",
-                f"{row_context} lies on neither the initial-inventory midpoint "
-                f"lattice (implied t=0 age {initial_age}) nor the regeneration "
-                "lattice",
-            )
-        cohort_id = cohort_record_id(ifm, au_id, stratum_code, curve_id, initial_age)
-        period_volumes = volumes.get(cohort_id)
-        if period_volumes is None:
-            raise RHError(
-                "rh_schedule_unknown_cohort",
-                f"{row_context} maps to t=0 cohort {cohort_id!r}, which is absent "
-                "from the injected state table",
-            )
-        period_volumes[period - 1] += float(row.volume_m3)
-    return {cohort_id: tuple(values) for cohort_id, values in volumes.items()}
 
 
 def annual_ceiling_matrix(
@@ -944,8 +1138,8 @@ def annual_ceiling_matrix(
     }
 
 
-def _schedule_dtype_identity(dtype_key: str) -> tuple[str, str, str, int]:
-    """Parse a schedule JSON dtype key into ``(ifm, au_id, stratum, curve_id)``."""
+def _schedule_dtype_parts(dtype_key: str) -> tuple[str, str, str, str, int]:
+    """Parse a schedule JSON dtype key into its five identity parts."""
 
     key = json.loads(dtype_key)
     if len(key) != DTYPE_KEY_LENGTH:
@@ -954,8 +1148,15 @@ def _schedule_dtype_identity(dtype_key: str) -> tuple[str, str, str, int]:
             f"WS3 schedule dtype key is not a {DTYPE_KEY_LENGTH}-element list: "
             f"{dtype_key!r}",
         )
-    _tsa, ifm, au_id, stratum_code, curve_id = (str(part) for part in key)
-    return ifm, au_id, stratum_code, int(curve_id)
+    tsa, ifm, au_id, stratum_code, curve_id = (str(part) for part in key)
+    return tsa, ifm, au_id, stratum_code, int(curve_id)
+
+
+def _schedule_dtype_identity(dtype_key: str) -> tuple[str, str, str, int]:
+    """Parse a schedule JSON dtype key into ``(ifm, au_id, stratum, curve_id)``."""
+
+    _tsa, ifm, au_id, stratum_code, curve_id = _schedule_dtype_parts(dtype_key)
+    return ifm, au_id, stratum_code, curve_id
 
 
 def _is_initial_lineage_age(initial_age: int, age_smashing: AgeSmashing) -> bool:
@@ -1101,8 +1302,10 @@ __all__ = [
     "COHORT_COLUMNS",
     "DTYPE_KEY_LENGTH",
     "FRACTION_SNAP_TOLERANCE",
+    "RegeneratedCohortSpec",
     "RHError",
     "STATE_KEY_COLUMNS",
+    "SchedulePeriodVolumes",
     "WS3_HARVEST_RESET_AGE",
     "advance_cohort_table",
     "annual_ceiling",
@@ -1114,5 +1317,6 @@ __all__ = [
     "run_planning",
     "run_rh",
     "schedule_cohort_period_volumes",
+    "schedule_period_volumes",
     "write_cohort_table",
 ]

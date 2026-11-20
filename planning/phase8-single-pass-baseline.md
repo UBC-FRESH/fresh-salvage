@@ -1,6 +1,6 @@
 # Phase 8: Single-Pass 100-Year Planning Baseline
 
-Status: active (P8.1-P8.6 implemented; independent review round applied; pending PR)
+Status: active (P8.1-P8.6 implemented; independent review round applied; pending PR; Q3 regenerated-cohort extension applied 2026-11-20, section 3.4)
 
 Branch: `feature/p8-single-pass-baseline` (cut from
 `origin/fix/schedule-group-volume-dedup` at `9b5a0a0`, the PR #32 head;
@@ -95,6 +95,13 @@ at most one period:
 | D1 | WS3: one solve at t=0 with `horizon` periods (default 15, the same as RH). Implement periods `1..steps` (10). | It is the same WS3 problem as RH step 1, so the WS3 side differs between modes only through re-planning. The 5 extra periods give the end-of-horizon guard that RH also has. | Identical to RH step 1's WS3 problem. |
 | D2 | Volume growth: decadal piecewise. For decade `k` (0-based), the cohort per-ha volume comes from its yield curve at age `age0 + L*k`, clamped to the curve age cap (`rh.curve_age_caps`). It is used in the principal (green/burned volumes, offer/loss coefficients, AAC and ceiling rows) and in the agent (margins, fire influx volume). | A 100-year LP that values every cohort at its t=0 volume would misprice long-delayed harvests. RH re-reads volumes at each decade start, so decadal piecewise matches RH's information granularity. | When the LP horizon is at most `L`, only `k=0` exists, so the coefficients must be **bit-identical** to today's. |
 | D3 | Regenerated stands are not LP cohorts. If the schedule harvests a regenerated stand (an age on the WS3 regeneration lattice) inside the implemented periods, fail fast with a structured diagnostic. | The LP cohort set is the t=0 inventory. Regenerated area has no t=0 cohort to carry offers or decisions. Evidence: no TSA29 regen harvest occurs in periods 1-10; the first is in period 12 (section 5.4). | Not applicable (RH re-forms cohorts each step). |
+
+D3 is superseded **for single pass only** by the Q3 regenerated-cohort
+extension in section 3.4. The strict
+`rh.schedule_cohort_period_volumes` mapper keeps the D3 fail-fast for
+callers that did not opt into the extension; single pass now calls
+`rh.schedule_period_volumes`, which returns explicit regenerated-cohort
+specs.
 | D4 | Burned stock: by default, single pass carries burned inventory continuously over 100 years. Optional flag `burned_stock_reset: bool = False` resets it at decade boundaries, mimicking RH: the agent burned inventory is dropped and the principal burned path is re-seeded. | This isolates the RH burned-stock artifact (`rh.py:48-64`) as its own experimental factor. | `burned_stock_reset` has no effect when horizon is at most `L`. |
 | D5 | Grade clock: single pass uses `year mod period_length` as the grade-transition index. | This gives pricing identical to RH, whose window years are `0..L-1`. Grade pricing is then not a confounder. | Identity for `year < L`. RH is unchanged. |
 | D6 | Principal burned seed: seeded once at t=0 in single pass. It is re-seeded per decade only under `burned_stock_reset`. | RH re-seeds every step because every step re-parses cohorts (`principal.py:847-849`). | Identity for horizon at most `L`. |
@@ -319,6 +326,72 @@ open as backlog (no code change in this round).
 - **m9:** the tautological status branch in `run_single_pass` is now a
   commented `status = ws3_status` (the single t=0 solve is the only solve
   status recorded; a non-optimal solve already raised).
+
+### 3.4 Q3 regenerated-cohort extension (2026-11-20)
+
+The corrected TSA29 land base (femic THLB allocation worktree) makes WS3
+reharvest regenerated stands inside the implemented horizon: period 9 has
+97 regeneration-lattice rows (7 dedup groups, 36,437.07 ha, 9,856,940.06 m3
+raw) in the 15-period corrected-bridge schedule. The D3 fail-fast therefore
+blocked every corrected-land-base single-pass run. This extension represents
+those rows instead of dropping them.
+
+- **Schedule mapping.** `rh.schedule_period_volumes` returns both the
+  initial-lineage volume matrix (unchanged) and one
+  `RegeneratedCohortSpec` per `(dtype_key, period, age)` group. Area is the
+  group's summed WS3 row area; volume is the group's summed raw scheduled
+  `totvol` (the `_compile_schedule` basis, before the utilization factor),
+  the same basis as the initial-lineage ceilings. The birth period is
+  `b = period - (age - WS3_HARVEST_RESET_AGE) / period_length`; the
+  availability year is `(period - 1) * period_length` (the first year of the
+  scheduled period). Cohort ids are
+  `regen:<ifm>:<au_id>:<stratum>:<curve>:b<birth>:a<age>`.
+- **LP representation.** Each spec becomes one principal and one agent
+  cohort. The green/standing volume is the scheduled volume, `burned=0` and
+  `burn_rate=0` (the spec is the scheduled green-harvest block, not a t=0
+  stand), and `decadal_volume_scale` is the constant scheduled per-ha volume
+  in every decade. The per-year ceiling matrix carries the scheduled volume
+  in the scheduled period and zero elsewhere, so the principal offer and
+  agent H/S variables are zero outside availability. The LP may choose not
+  to harvest the block, but it cannot move it outside the scheduled period;
+  the model does not attempt to represent regeneration growth/operability
+  beyond the WS3 schedule. Because the scale is constant, no
+  `agent_degenerate_growth_ratio` boundary is introduced.
+- **Replay linkage.** The spec is not added to the replayed state. In its
+  scheduled decade, the agent H fractions (times the scheduled area) are
+  applied as a harvest event to every active descendant lineage with the
+  same dtype and **birth (last clear-cut) period**, allocated by live area;
+  the event removes area from the live pool and regenerates it at the
+  boundary. The birth period survives fire-driven re-regeneration and resets
+  when an explicit regen event clear-cuts the stand, so the claim draws on
+  the whole post-clear-cut descendant pool rather than only the survivors of
+  the formation decade. This is the "event on the existing lineage" option:
+  no area is added at birth and the parent area is never double-counted.
+  Area conservation stays at the existing 1e-6 relative gate. A claim larger
+  than the matching live pool raises `single_pass_regen_area_unavailable`
+  rather than being capped or dropped.
+- **Metadata and fail-fast codes.** With regen cohorts present the manifest
+  and result carry a `single_pass_regenerated_cohorts` info diagnostic with
+  cohort ids, area, scheduled volume, periods, birth periods, and the
+  volume/availability basis. New structured codes:
+  `rh_schedule_regenerated_birth_invalid`,
+  `rh_schedule_regenerated_area_invalid`,
+  `rh_schedule_regenerated_volume_invalid`,
+  `single_pass_regen_curve_missing`, `single_pass_regen_stratum_invalid`,
+  `single_pass_regen_stratum_unmapped`, `single_pass_regen_area_invalid`,
+  `single_pass_regen_volume_invalid`, `single_pass_regen_schedule_missing`,
+  `single_pass_regen_schedule_shape_mismatch`,
+  `single_pass_regen_fraction_invalid`, and
+  `single_pass_regen_area_unavailable`.
+- **RH unchanged.** `run_rh` still uses `_period1_cohort_volumes` and
+  `advance_cohort_table`; `schedule_cohort_period_volumes` still raises the
+  D3 code. The `steps=1` oracle is unchanged because period 1 can never be
+  a regeneration-harvest period. Tests: mapping/grouping/malformed rows in
+  `tests/test_rh.py`; cohort basis, availability, ceiling binding, replay
+  linkage/conservation, and malformed-schedule guards in
+  `tests/test_single_pass.py`; a gated corrected-bridge `steps=9` smoke
+  (`FRESH_SALVAGE_Q3_REGEN_INTEGRATION=1` plus
+  `FRESH_SALVAGE_CORRECTED_BRIDGE=<corrected pre-smashed bridge dir>`).
 
 ## 4. Configuration surface (P8.4)
 

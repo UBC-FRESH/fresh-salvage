@@ -486,7 +486,18 @@ and the replay guards ``single_pass_invalid_shape``,
 ``single_pass_curve_age_cap_missing``,
 ``single_pass_fire_simulation_failed``,
 ``single_pass_state_empty_after_decade``, ``single_pass_cohort_alignment``,
-and ``single_pass_objective_decomposition_missing``.
+and ``single_pass_objective_decomposition_missing``. Regenerated-cohort
+construction adds ``single_pass_regen_curve_missing``,
+``single_pass_regen_stratum_invalid``, ``single_pass_regen_stratum_unmapped``,
+``single_pass_regen_area_invalid``, ``single_pass_regen_volume_invalid``,
+``single_pass_regen_schedule_missing``,
+``single_pass_regen_schedule_shape_mismatch``,
+``single_pass_regen_fraction_invalid``, and
+``single_pass_regen_area_unavailable``; the schedule mapper reports
+``rh_schedule_regenerated_birth_invalid``,
+``rh_schedule_regenerated_area_invalid``, and
+``rh_schedule_regenerated_volume_invalid`` inside
+``single_pass_failed`` when a WS3 regeneration row cannot be represented.
 
 **Not comparable across modes: the WS3 objective (D8).** Single pass solves
 the WS3 problem once and fills the WS3 fields on decade 1 only; rolling

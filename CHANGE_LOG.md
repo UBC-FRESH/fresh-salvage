@@ -5,6 +5,24 @@ This is the project narrative for `fresh-salvage`. Newest entries first
 
 ## Unreleased
 
+- Q3 regenerated-cohort extension (2026-11-20; branch
+  `feature/q3-regen-cohorts`): the corrected TSA29 bridge makes WS3 harvest
+  regenerated stands inside the implemented horizon (period 9: 97 rows /
+  9,856,940 m3 raw), which triggered the Phase 8 D3
+  `rh_schedule_regenerated_harvest` fail-fast in single pass. Single pass now
+  maps those rows to explicit `RegeneratedCohortSpec` cohorts via
+  `rh.schedule_period_volumes` (row area, raw scheduled `totvol`, birth
+  period, `(period-1)*period_length` availability; zero ceilings outside
+  the scheduled period), adds them to both LPs with no burned volume/burn
+  rate, and replays their agent H fractions as a harvest event on the
+  matching dtype/origin-birth-period regen lineage pool (no double-counted
+  area, existing 1e-6 conservation gate). RH, the strict
+  `schedule_cohort_period_volumes` D3 guard, and the `steps=1` oracle are
+  unchanged. New structured codes and a
+  `single_pass_regenerated_cohorts` manifest diagnostic record the
+  construction; docs and the Phase 8 planning note carry the design. Q3 was
+  re-run at $24.10 and $21.50 on the corrected bridge.
+
 - Phase 9 closed **NO-GO** on the WS4 backend swap (2026-10-19; decision
   gate P9.4, #44; parent issue #40): the project keeps WS3 as its results
   pipeline. Rationale: the aspatial WS4 step is ~16x the WS3 per-decade

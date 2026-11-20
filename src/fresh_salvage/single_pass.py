@@ -46,15 +46,41 @@ regenerates as a regen sub-cohort in the same development type at
 ``age_smashing.midpoint``, exactly as
 :func:`fresh_salvage.rh.advance_cohort_table` regenerates each step's removed
 area. Regen sub-cohorts age ``+period_length`` per decade (clamped to the
-curve age cap), are never harvested (D3 rejects a WS3 harvest of an
-in-horizon regenerated stand), and stay exposed to fire; their own burned area
-regenerates again at the next boundary. Surviving live t=0 area ages by
+curve age cap) and stay exposed to fire; their own burned area regenerates
+again at the next boundary. Surviving live t=0 area ages by
 ``+period_length`` clamped to the cap. Area is conserved to 1e-6 relative at
 every boundary, and ``area_burned_ha`` per decade sums ``area * burn_influx``
 over t=0 cohorts and regen sub-cohorts. This mirrors RH's regeneration
 convention (the replay decides the reported state); the WS3 t=0 solve uses its
 own convention (``*ACTION cc Y`` -> clear-cut target age 0), which only matters
 after period ``steps``.
+
+Regenerated-cohort harvests (extends D3)
+----------------------------------------
+The D3 contract excluded regenerated stands from the LP cohort set, and the
+strict :func:`fresh_salvage.rh.schedule_cohort_period_volumes` still does.
+Single pass now uses :func:`fresh_salvage.rh.schedule_period_volumes`, which
+also returns one explicit :class:`~fresh_salvage.rh.RegeneratedCohortSpec` per
+WS3 ``(dtype_key, period, age)`` regeneration-lattice group. Each spec carries
+the group's area and raw scheduled volume (the same pre-utilization ``totvol``
+basis as the initial-lineage ceilings), its birth period
+``b = period - age / L``, and an availability year ``(period - 1) * L``. The
+LP cohort uses that scheduled volume as its standing basis, no burned volume
+and no burn rate (it represents the scheduled green harvest only), and a
+constant decadal per-ha scale; its per-year ceiling matrix is zero outside the
+scheduled period, so the principal offer and the agent H/S variables are zero
+before and after it. The cohort cannot shift the regen harvest outside the
+WS3 schedule.
+
+The replay links the cohort to the existing lineage instead of adding area at
+birth: in the scheduled decade its agent H fractions (times its scheduled
+area) are allocated across every active descendant of the same dtype and
+origin birth period in proportion to live area, and applied as a harvest event
+on those lineages. The event removes area from the live pool and regenerates
+it at the boundary, so the parent area is never double-counted and area
+conservation is unchanged. A claim larger than the matching live pool fails
+fast with ``single_pass_regen_area_unavailable`` instead of being capped or
+dropped.
 
 Outputs (planning section 7)
 ----------------------------
@@ -75,7 +101,9 @@ rolling-horizon engine sums its step records). State snapshots
 
 from __future__ import annotations
 
+import math
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,6 +114,8 @@ from fresh_salvage import agent, fire, principal, rh, ws3
 from fresh_salvage.models import (
     AgentResult,
     ArtifactLayout,
+    Diagnostic,
+    Economics,
     PrincipalResult,
     RHManifest,
     RHResult,
@@ -136,11 +166,23 @@ class _ReplayLineage:
     as fractions of that reference area (``1.0``/``0.0`` for a freshly formed
     regen sub-cohort and for a t=0 cohort at t=0). ``state_index`` indexes the
     initial state row whose agent schedule drives the lineage (``None`` for
-    regen sub-cohorts, which are never harvested). ``elapsed_years`` counts the
+    regen sub-cohorts, which carry no t=0 schedule). ``elapsed_years`` counts the
     years since formation at the start of the current decade; it indexes the
-    memoized zero-harvest trajectory of a regen sub-cohort. ``burned_before``
-    is carried and updated for parity with the LP's boundary semantics but
-    never enters a reported output (salvage is not replayed; see
+    memoized zero-harvest trajectory of a regen sub-cohort.
+
+    ``origin_dtype``/``birth_period`` identify the regeneration pool a lineage
+    descends from: the initial-lineage dtype and the **last clear-cut period**
+    that formed it. ``birth_period`` survives fire-driven re-regeneration
+    (the stand is still the same cohort since that clear-cut) but resets to
+    the current period when an explicit regen event harvests the lineage (a
+    new stand). An explicit regenerated cohort therefore reclaims its
+    scheduled area from the whole descendant pool of its own clear-cut
+    without double-counting area. ``harvested`` marks a lineage that an
+    explicit regen event has already touched; its carried state no longer
+    matches the fresh zero-harvest memo, so it is simulated directly.
+
+    ``burned_before`` is carried and updated for parity with the LP's boundary
+    semantics but never enters a reported output (salvage is not replayed; see
     :func:`replay_lineage`).
     """
 
@@ -156,6 +198,9 @@ class _ReplayLineage:
     burn_rate: float
     state_index: int | None
     elapsed_years: int = 0
+    origin_dtype: tuple[str, str, str, str, int] | None = None
+    birth_period: int | None = None
+    harvested: bool = False
 
 
 def replay_lineage(
@@ -170,6 +215,8 @@ def replay_lineage(
     regeneration_age: int,
     burn_rate_multiplier: float = 1.0,
     burned_stock_reset: bool = False,
+    regenerated_cohorts: Sequence[rh.RegeneratedCohortSpec] = (),
+    regenerated_harvests: Mapping[str, tuple[float, ...]] | None = None,
 ) -> LineageReplay:
     """Replay ``steps * period_length`` years in decade blocks from a t=0 state.
 
@@ -189,15 +236,29 @@ def replay_lineage(
     the LP's raw salvage fractions into the simulation against the replay's
     t=0-fraction burned carry could reject a schedule the LP proved feasible,
     so the replay leaves salvage to the LP and reports it directly. Regen
-    sub-cohorts carry no harvest schedule, so one memoized fresh zero-harvest
-    trajectory per burn rate supplies their decade slices with identical
-    floats (:func:`_zero_harvest_decade`). ``burned_stock_reset`` still
-    zeroes the carried burned inventory at every decade start; that carry
+    sub-cohorts carry no t=0 harvest schedule, so one memoized fresh
+    zero-harvest trajectory per burn rate supplies their decade slices with
+    identical floats (:func:`_zero_harvest_decade`). ``burned_stock_reset``
+    still zeroes the carried burned inventory at every decade start; that carry
     never enters a reported output either way.
 
+    ``regenerated_cohorts``/``regenerated_harvests`` represent WS3 harvests of
+    stands that regenerated inside the implemented horizon. Each spec is a
+    claim on the regen pool created by removals in its birth period: in the
+    spec's scheduled decade, the agent H fractions (of the spec's scheduled
+    area) are applied as a harvest event to every active descendant lineage
+    with the same dtype and birth (last clear-cut) period, allocated by live
+    area. This is the "event on the existing lineage" linkage: no regen area
+    is added at birth, so the parent area is never double-counted. The event
+    removes area from the live pool and regenerates it at the same boundary,
+    exactly like a t=0 harvest. A spec whose claim exceeds the matching live
+    pool fails fast with ``single_pass_regen_area_unavailable`` rather than
+    being dropped or capped.
+
     Raises ``SinglePassError`` on shape mismatches, unknown burn rates, missing
-    age caps, a harvest that overruns the replayed live volume, or an
-    area-conservation violation; nothing is written to disk.
+    age caps, a harvest that overruns the replayed live volume, an unsatisfied
+    regenerated-cohort claim, or an area-conservation violation; nothing is
+    written to disk.
     """
 
     if steps <= 0 or period_length <= 0:
@@ -224,6 +285,70 @@ def replay_lineage(
                 f"state row {index} carries {len(harvest)}/{len(salvage)} annual "
                 f"fractions but the replay covers {horizon} years",
             )
+    regen_specs = tuple(regenerated_cohorts)
+    regen_schedules = dict(regenerated_harvests or {})
+    spec_ids = {spec.cohort_id for spec in regen_specs}
+    unknown_schedules = sorted(set(regen_schedules) - spec_ids)
+    if unknown_schedules:
+        raise SinglePassError(
+            "single_pass_regen_schedule_unknown",
+            f"regenerated harvest schedules reference cohorts with no spec: "
+            f"{unknown_schedules[:5]}",
+        )
+    seen_claims: set[tuple[tuple[str, str, str, str, int], int, int]] = set()
+    for spec in regen_specs:
+        if spec.period < 1 or spec.period > steps:
+            raise SinglePassError(
+                "single_pass_regen_period_out_of_range",
+                f"regenerated cohort {spec.cohort_id!r} schedules period "
+                f"{spec.period} outside the implemented 1..{steps}",
+            )
+        if spec.birth_period < 1 or spec.birth_period >= spec.period:
+            raise SinglePassError(
+                "single_pass_regen_birth_invalid",
+                f"regenerated cohort {spec.cohort_id!r} has birth period "
+                f"{spec.birth_period} for scheduled period {spec.period}",
+            )
+        if not math.isfinite(spec.area_ha) or spec.area_ha <= 0.0:
+            raise SinglePassError(
+                "single_pass_regen_area_invalid",
+                f"regenerated cohort {spec.cohort_id!r} carries invalid area "
+                f"{spec.area_ha!r}",
+            )
+        if not math.isfinite(spec.volume_m3) or spec.volume_m3 < 0.0:
+            raise SinglePassError(
+                "single_pass_regen_volume_invalid",
+                f"regenerated cohort {spec.cohort_id!r} carries invalid volume "
+                f"{spec.volume_m3!r}",
+            )
+        schedule = regen_schedules.get(spec.cohort_id)
+        if schedule is None:
+            raise SinglePassError(
+                "single_pass_regen_schedule_missing",
+                f"regenerated cohort {spec.cohort_id!r} has no agent harvest "
+                "schedule",
+            )
+        if len(schedule) != horizon:
+            raise SinglePassError(
+                "single_pass_regen_schedule_shape_mismatch",
+                f"regenerated cohort {spec.cohort_id!r} carries {len(schedule)} "
+                f"annual fractions but the replay covers {horizon} years",
+            )
+        claim = (
+            (spec.tsa, spec.ifm, spec.au_id, spec.stratum_code, spec.curve_id),
+            spec.birth_period,
+            spec.period,
+        )
+        if claim in seen_claims:
+            raise SinglePassError(
+                "single_pass_regen_ambiguous_cohort",
+                f"more than one regenerated cohort claims the same dtype/birth "
+                f"period/scheduled period: {claim}",
+            )
+        seen_claims.add(claim)
+    specs_by_period: dict[int, list[rh.RegeneratedCohortSpec]] = {}
+    for spec in regen_specs:
+        specs_by_period.setdefault(spec.period, []).append(spec)
 
     snapshots = [state]
     area_burned: list[float] = []
@@ -235,8 +360,8 @@ def replay_lineage(
         for index, row in enumerate(state.itertuples(index=False))
     ]
     # One fresh zero-harvest trajectory per distinct burn rate serves every
-    # regen sub-cohort (they are never harvested, D3, so their state is a pure
-    # continuation of the fresh formation state).
+    # regen sub-cohort without an explicit event (it carries no t=0 schedule),
+    # so its state is a pure continuation of the fresh formation state.
     zero_harvest: dict[float, tuple[fire.FireYearState, ...]] = {}
     for decade in range(steps):
         decade_started = time.monotonic()
@@ -245,8 +370,15 @@ def replay_lineage(
         burned_decade = 0.0
         harvested_decade = 0.0
         salvaged_decade = 0.0
+        regen_events = _regenerated_decade_events(
+            active,
+            specs_by_period.get(decade + 1, ()),
+            regen_schedules,
+            year_start=year_start,
+            year_stop=year_stop,
+        )
         next_active: list[_ReplayLineage] = []
-        for lineage in active:
+        for index, lineage in enumerate(active):
             cap = age_caps.get(lineage.curve_id)
             if cap is None:
                 raise SinglePassError(
@@ -254,18 +386,24 @@ def replay_lineage(
                     f"cohort {_lineage_id(lineage)!r} curve {lineage.curve_id} has "
                     "no yield-curve age cap",
                 )
+            event = regen_events.get(index)
             if lineage.state_index is None:
-                years: tuple[fire.FireYearState, ...] | list[fire.FireYearState] = (
-                    _zero_harvest_decade(
-                        lineage,
-                        zero_harvest,
-                        horizon=horizon,
-                        period_length=period_length,
-                        decay_rate=decay_rate,
+                if event is None and not lineage.harvested:
+                    years: tuple[fire.FireYearState, ...] | list[fire.FireYearState] = (
+                        _zero_harvest_decade(
+                            lineage,
+                            zero_harvest,
+                            horizon=horizon,
+                            period_length=period_length,
+                            decay_rate=decay_rate,
+                        )
                     )
-                )
-                # Regen sub-cohorts are never harvested or salvaged (D3).
-                harvest = salvage = ()
+                    # A regen sub-cohort with no event carries no harvest.
+                    harvest = salvage = ()
+                else:
+                    harvest = event if event is not None else (0.0,) * period_length
+                    salvage = ()
+                    years = _simulate_decade(lineage, harvest, decay_rate)
             else:
                 harvest, salvage = _decade_schedules(
                     lineage, harvests, salvages, year_start, year_stop, period_length
@@ -291,10 +429,27 @@ def replay_lineage(
                             0.0 if burned_stock_reset else years[-1].burned_after
                         ),
                         elapsed_years=lineage.elapsed_years + period_length,
+                        harvested=lineage.harvested or event is not None,
                     )
                 )
             regen_area = lineage.reference_area_ha * removed
             if regen_area > 0.0:
+                origin_dtype = lineage.origin_dtype
+                if origin_dtype is None:
+                    origin_dtype = (
+                        lineage.tsa,
+                        lineage.ifm,
+                        lineage.au_id,
+                        lineage.stratum_code,
+                        lineage.curve_id,
+                    )
+                # A t=0 clear-cut or an explicit regen harvest starts a new
+                # stand (birth = this period). Fire-only removal of a regen
+                # lineage keeps the stand's last clear-cut period.
+                if lineage.state_index is not None or event is not None:
+                    birth_period = decade + 1
+                else:
+                    birth_period = lineage.birth_period
                 next_active.append(
                     replace(
                         lineage,
@@ -304,6 +459,9 @@ def replay_lineage(
                         burned_before=0.0,
                         state_index=None,
                         elapsed_years=0,
+                        origin_dtype=origin_dtype,
+                        birth_period=birth_period,
+                        harvested=False,
                     )
                 )
         snapshot = _replay_state_table(next_active)
@@ -441,7 +599,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
             )
         schedule, ws3_objective = ws3._compile_schedule(model, problem, ws3_config)
         schedule.to_csv(schedule_path, index=False)
-        period_volumes = rh.schedule_cohort_period_volumes(
+        mapping = rh.schedule_period_volumes(
             schedule,
             ws3_config.objective.action_code,
             state,
@@ -449,8 +607,27 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
             period_length=config.period_length,
             age_smashing=config.age_smashing,
         )
+        period_volumes = dict(mapping.initial)
+        for spec in mapping.regenerated:
+            period_volumes[spec.cohort_id] = spec.period_volumes
         ceilings = rh.annual_ceiling_matrix(period_volumes, config.period_length)
         curve_ages = _cohort_curve_ages(state)
+        regenerated = mapping.regenerated
+        regenerated_p = _regenerated_principal_cohorts(
+            regenerated,
+            economics=economics,
+            price_by_dt=principal_economics,
+            curves=curves,
+            horizon=horizon,
+            period_length=config.period_length,
+        )
+        regenerated_a = _regenerated_agent_cohorts(
+            regenerated,
+            price_by_dt=agent_economics,
+            curves=curves,
+            horizon=horizon,
+            period_length=config.period_length,
+        )
 
         # Principal LP over the whole run: per-year WS3 ceilings, decadal
         # growth surface, grade clock period_length (D5), burned-stock
@@ -469,7 +646,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
         cohorts_p = [
             replace(cohort, decadal_volume_scale=scale)
             for cohort, scale in zip(cohorts_p, scales, strict=True)
-        ]
+        ] + regenerated_p
         principal_result = principal.solve_principal(
             cohorts_p,
             horizon=horizon,
@@ -497,7 +674,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
         cohorts_a = [
             replace(cohort, decadal_volume_scale=scale)
             for cohort, scale in zip(cohorts_a, scales, strict=True)
-        ]
+        ] + regenerated_a
         offers = agent.resolve_offers(
             cohorts_a, horizon=horizon, offers_path=offers_path
         )
@@ -520,6 +697,9 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
         # 100-year lineage replay in decade blocks; every boundary snapshot is
         # written as an ARE section (step_00 came from the boundary parse).
         harvests, salvages = rh._fraction_schedules(state, agent_result)
+        regenerated_harvests = _regenerated_harvest_schedules(
+            regenerated, agent_result, horizon
+        )
         replay = replay_lineage(
             state,
             harvests=harvests,
@@ -531,6 +711,8 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
             regeneration_age=config.age_smashing.midpoint,
             burn_rate_multiplier=config.burn_rate_multiplier,
             burned_stock_reset=config.burned_stock_reset,
+            regenerated_cohorts=regenerated,
+            regenerated_harvests=regenerated_harvests,
         )
         for boundary, snapshot in enumerate(replay.snapshots[1:], start=1):
             rh.write_cohort_table(snapshot, state_dir / f"step_{boundary:02d}.are")
@@ -567,6 +749,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
         ws3_build_seconds=ws3_build_seconds,
         ws3_solve_seconds=ws3_solve_seconds,
     )
+    diagnostics = _regenerated_diagnostics(regenerated)
     with steps_path.open("w", encoding="utf-8") as steps_file:
         for record in step_records:
             steps_file.write(record.model_dump_json() + "\n")
@@ -608,6 +791,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
         source_sha256=rh._source_checksums(config, bridge),
         step_records=step_records,
         config=config.model_dump(mode="json"),
+        diagnostics=diagnostics,
     )
     manifest.write_json(manifest_path)
 
@@ -632,6 +816,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
         steps_path=steps_path,
         final_state_path=final_state_path,
         manifest_path=manifest_path,
+        diagnostics=diagnostics,
     )
 
 
@@ -756,6 +941,227 @@ def _require_cohort_alignment(
             )
 
 
+def _regenerated_principal_cohorts(
+    specs: Sequence[rh.RegeneratedCohortSpec],
+    *,
+    economics: Economics,
+    price_by_dt: dict[str, dict[str, object]],
+    curves: dict[int, tuple[object, object]],
+    horizon: int,
+    period_length: int,
+) -> list[principal.PrincipalCohort]:
+    """Build principal LP cohorts for the explicit regenerated harvests.
+
+    Each cohort carries the WS3 row group's area and raw scheduled volume as
+    its standing basis, a union-bound green stumpage cashflow, and **no burned
+    volume or burn rate**: it represents the scheduled green harvest only.
+    ``decadal_volume_scale`` is the row's scheduled per-ha volume in every
+    decade. That keeps the LP's year-0 and later-decade coefficients identical
+    to the scheduled volume and avoids a fictitious growth/decline boundary;
+    the per-year ceiling matrix is zero outside the scheduled period, so the
+    cohort cannot be offered before or after it.
+    """
+
+    cohorts: list[principal.PrincipalCohort] = []
+    for spec in specs:
+        development_type = _regenerated_development_type(
+            spec, price_by_dt=price_by_dt, curves=curves
+        )
+        _require_regenerated_amounts(spec)
+        per_ha = spec.volume_m3 / spec.area_ha
+        scale = (per_ha,) * math.ceil(horizon / period_length)
+        cohorts.append(
+            principal.PrincipalCohort(
+                cohort_id=spec.cohort_id,
+                stratum_code=spec.stratum_code,
+                development_type=development_type,
+                area_ha=spec.area_ha,
+                green_volume_m3=spec.volume_m3,
+                burned_volume_m3=0.0,
+                cashflow=spec.volume_m3 * economics.green_stumpage_rate,
+                burned_value=0.0,
+                burn_rate=0.0,
+                burned_grade_mix=None,
+                burned_grade_prices=None,
+                green_stumpage_rate=economics.green_stumpage_rate,
+                burned_stumpage_rate=economics.burned_stumpage_rate,
+                subsidy_rate_per_m3=economics.subsidy_rate_per_m3,
+                decadal_volume_scale=scale,
+            )
+        )
+    return cohorts
+
+
+def _regenerated_agent_cohorts(
+    specs: Sequence[rh.RegeneratedCohortSpec],
+    *,
+    price_by_dt: dict[str, dict[str, object]],
+    curves: dict[int, tuple[object, object]],
+    horizon: int,
+    period_length: int,
+) -> list[agent.AgentCohort]:
+    """Build agent LP cohorts for the explicit regenerated harvests.
+
+    Mirrors :func:`_regenerated_principal_cohorts`: the scheduled row volume is
+    the standing basis, the burn rate is zero (no burned inventory or salvage
+    on the scheduled green block), and the constant decadal scale keeps the
+    LP's per-year volume equal to the scheduled volume. Zero ceilings outside
+    the scheduled period bound H/S to zero there.
+    """
+
+    cohorts: list[agent.AgentCohort] = []
+    for spec in specs:
+        development_type = _regenerated_development_type(
+            spec, price_by_dt=price_by_dt, curves=curves
+        )
+        _require_regenerated_amounts(spec)
+        per_ha = spec.volume_m3 / spec.area_ha
+        scale = (per_ha,) * math.ceil(horizon / period_length)
+        cohorts.append(
+            agent.AgentCohort(
+                cohort_id=spec.cohort_id,
+                stratum_code=spec.stratum_code,
+                development_type=development_type,
+                area_ha=spec.area_ha,
+                standing_volume_m3=spec.volume_m3,
+                burn_rate=0.0,
+                green_price_m3=float(price_by_dt[development_type]["green_price"]),
+                burned_price_m3=float(price_by_dt[development_type]["burned_price"]),
+                burned_grade_mix=None,
+                burned_grade_prices=None,
+                decadal_volume_scale=scale,
+            )
+        )
+    return cohorts
+
+
+def _regenerated_development_type(
+    spec: rh.RegeneratedCohortSpec,
+    *,
+    price_by_dt: dict[str, dict[str, object]],
+    curves: dict[int, tuple[object, object]],
+) -> str:
+    """Map a regen spec to its stands-table development type, failing fast."""
+
+    if spec.curve_id not in curves:
+        raise SinglePassError(
+            "single_pass_regen_curve_missing",
+            f"regenerated cohort {spec.cohort_id!r} references yield curve "
+            f"{spec.curve_id}, which is absent from the yields table",
+        )
+    try:
+        development_type = principal._development_type_from_stratum(
+            spec.stratum_code
+        )
+    except fire.UnknownBurnRateError as exc:
+        raise SinglePassError(
+            "single_pass_regen_stratum_invalid",
+            f"regenerated cohort {spec.cohort_id!r} carries malformed stratum "
+            f"{spec.stratum_code!r}: {exc}",
+        ) from exc
+    if development_type not in price_by_dt:
+        raise SinglePassError(
+            "single_pass_regen_stratum_unmapped",
+            f"regenerated cohort {spec.cohort_id!r} maps to development type "
+            f"{development_type!r}, which has no stands-table economics",
+        )
+    return development_type
+
+
+def _require_regenerated_amounts(spec: rh.RegeneratedCohortSpec) -> None:
+    """Fail fast on a regen spec without a usable area/volume basis."""
+
+    if not math.isfinite(spec.area_ha) or spec.area_ha <= 0.0:
+        raise SinglePassError(
+            "single_pass_regen_area_invalid",
+            f"regenerated cohort {spec.cohort_id!r} carries invalid area "
+            f"{spec.area_ha!r}",
+        )
+    if not math.isfinite(spec.volume_m3) or spec.volume_m3 < 0.0:
+        raise SinglePassError(
+            "single_pass_regen_volume_invalid",
+            f"regenerated cohort {spec.cohort_id!r} carries invalid volume "
+            f"{spec.volume_m3!r}",
+        )
+
+
+def _regenerated_harvest_schedules(
+    specs: Sequence[rh.RegeneratedCohortSpec],
+    result: AgentResult,
+    horizon: int,
+) -> dict[str, tuple[float, ...]]:
+    """Align the agent H fractions of every regenerated cohort by year."""
+
+    harvest_by_id: dict[str, list[float]] = {}
+    last_year_by_id: dict[str, int] = {}
+    for decision in result.decisions:
+        last_year = last_year_by_id.get(decision.cohort_id)
+        if last_year is not None and decision.year < last_year:
+            raise SinglePassError(
+                "single_pass_regen_decision_order_invalid",
+                f"agent decisions for regenerated cohort "
+                f"{decision.cohort_id!r} are not year-ascending (year "
+                f"{decision.year} follows year {last_year})",
+            )
+        last_year_by_id[decision.cohort_id] = decision.year
+        harvest_by_id.setdefault(decision.cohort_id, []).append(
+            decision.harvest_fraction
+        )
+    schedules: dict[str, tuple[float, ...]] = {}
+    for spec in specs:
+        values = harvest_by_id.get(spec.cohort_id)
+        if values is None:
+            raise SinglePassError(
+                "single_pass_regen_schedule_missing",
+                f"agent decisions do not cover regenerated cohort "
+                f"{spec.cohort_id!r}",
+            )
+        if len(values) != horizon:
+            raise SinglePassError(
+                "single_pass_regen_schedule_shape_mismatch",
+                f"agent decisions for regenerated cohort {spec.cohort_id!r} "
+                f"cover {len(values)} years but the run horizon is {horizon}",
+            )
+        schedules[spec.cohort_id] = tuple(values)
+    return schedules
+
+
+def _regenerated_diagnostics(
+    specs: Sequence[rh.RegeneratedCohortSpec],
+) -> list[Diagnostic]:
+    """Return the manifest diagnostic recording the explicit regen cohorts."""
+
+    if not specs:
+        return []
+    return [
+        Diagnostic(
+            severity="info",
+            code="single_pass_regenerated_cohorts",
+            message=(
+                f"{len(specs)} explicit regenerated cohort(s) constructed from "
+                "WS3 regeneration-lattice harvest rows; replayed as harvest "
+                "events on the matching regen lineage pool"
+            ),
+            context={
+                "cohorts": len(specs),
+                "cohort_ids": [spec.cohort_id for spec in specs],
+                "area_ha": sum(spec.area_ha for spec in specs),
+                "scheduled_volume_m3": sum(spec.volume_m3 for spec in specs),
+                "periods": sorted({spec.period for spec in specs}),
+                "birth_periods": sorted({spec.birth_period for spec in specs}),
+                "volume_basis": (
+                    "WS3 schedule raw totvol (pre-utilization), same basis as "
+                    "the initial-lineage ceilings"
+                ),
+                "availability": (
+                    "scheduled period only; the annual ceiling matrix is zero "
+                    "outside it"
+                ),
+            },
+        )
+    ]
+
+
 def _replay_lineage_from_state_row(
     row: object, state_index: int, burn_rate_multiplier: float
 ) -> _ReplayLineage:
@@ -793,6 +1199,103 @@ def _replay_lineage_from_state_row(
     )
 
 
+def _regenerated_decade_events(
+    active: list[_ReplayLineage],
+    specs: Sequence[rh.RegeneratedCohortSpec],
+    schedules: Mapping[str, tuple[float, ...]],
+    *,
+    year_start: int,
+    year_stop: int,
+) -> dict[int, tuple[float, ...]]:
+    """Return the per-lineage harvest fractions of this decade's regen claims.
+
+    A spec's agent H fractions are fractions of its scheduled cohort area. Its
+    claim is ``sum(H) * area_ha`` hectares, allocated across every active
+    descendant lineage with the same dtype and birth (last clear-cut) period
+    in proportion to live area. Each lineage receives annual harvest fractions
+    of its own reference area, preserving the LP's within-decade timing. A
+    claim larger than the matching live pool fails fast rather than being
+    capped.
+    """
+
+    events: dict[int, tuple[float, ...]] = {}
+    for spec in specs:
+        schedule = schedules[spec.cohort_id]
+        decade_fractions = schedule[year_start:year_stop]
+        total_fraction = sum(decade_fractions)
+        if total_fraction <= 0.0:
+            continue
+        if total_fraction > 1.0 + 1e-9:
+            raise SinglePassError(
+                "single_pass_regen_fraction_invalid",
+                f"regenerated cohort {spec.cohort_id!r} harvests "
+                f"{total_fraction} of its area in period {spec.period}; the "
+                "sell-once bound allows at most 1.0",
+            )
+        target_area_ha = total_fraction * spec.area_ha
+        if target_area_ha <= 0.0:
+            continue
+        origin_dtype = (
+            spec.tsa,
+            spec.ifm,
+            spec.au_id,
+            spec.stratum_code,
+            spec.curve_id,
+        )
+        matches = [
+            (index, lineage)
+            for index, lineage in enumerate(active)
+            if lineage.state_index is None
+            and lineage.origin_dtype == origin_dtype
+            and lineage.birth_period == spec.birth_period
+        ]
+        available_area_ha = sum(
+            lineage.reference_area_ha * lineage.live_before
+            for _index, lineage in matches
+        )
+        tolerance = max(
+            1e-9, abs(available_area_ha) * rh.AREA_CONSERVATION_REL_TOLERANCE
+        )
+        if target_area_ha > available_area_ha + tolerance:
+            raise SinglePassError(
+                "single_pass_regen_area_unavailable",
+                f"regenerated cohort {spec.cohort_id!r} schedules "
+                f"{target_area_ha:.6f} ha at period {spec.period} but the "
+                f"matching lineage pool (dtype {origin_dtype}, birth period "
+                f"{spec.birth_period}) holds only {available_area_ha:.6f} ha",
+            )
+        if available_area_ha <= 0.0:
+            continue
+        for index, lineage in matches:
+            live_area_ha = lineage.reference_area_ha * lineage.live_before
+            allocated_area_ha = target_area_ha * live_area_ha / available_area_ha
+            if allocated_area_ha <= 0.0:
+                continue
+            if lineage.reference_area_ha <= 0.0:
+                raise SinglePassError(
+                    "single_pass_regen_lineage_area_invalid",
+                    f"regenerated cohort {spec.cohort_id!r} matched lineage "
+                    f"{_lineage_id(lineage)!r} with non-positive reference area "
+                    f"{lineage.reference_area_ha}",
+                )
+            annual = tuple(
+                allocated_area_ha
+                * (fraction / total_fraction)
+                / lineage.reference_area_ha
+                for fraction in decade_fractions
+            )
+            previous = events.get(index)
+            events[index] = (
+                annual
+                if previous is None
+                else tuple(
+                    left + right
+                    for left, right in zip(previous, annual, strict=True)
+                )
+            )
+    return events
+
+
 def _decade_schedules(
     lineage: _ReplayLineage,
     harvests: list[tuple[float, ...]],
@@ -803,10 +1306,10 @@ def _decade_schedules(
 ) -> tuple[tuple[float, ...], tuple[float, ...]]:
     """Return one t=0 lineage's harvest/salvage slice of the current decade.
 
-    Only t=0 cohorts carry a schedule; regen sub-cohorts are never harvested
-    (D3) and take the memoized zero-harvest trajectory path instead. Only the
-    harvest slice drives the replay simulation (salvage is not replayed); the
-    salvage slice is reporting-only (``area_salvaged_ha``).
+    Only t=0 cohorts carry a t=0 schedule; regen sub-cohorts use the regen
+    event path or the memoized zero-harvest trajectory. Only the harvest slice
+    drives the replay simulation (salvage is not replayed); the salvage slice
+    is reporting-only (``area_salvaged_ha``).
     """
 
     return (
@@ -825,16 +1328,17 @@ def _zero_harvest_decade(
 ) -> tuple[fire.FireYearState, ...]:
     """Return a regen lineage's decade slice of its memoized trajectory.
 
-    A regenerated lineage is never harvested or salvaged (D3), so from its
-    fresh formation state (``live=1``, ``burned=0``) its inventory follows one
-    recurrence that depends only on the burn rate. A single fresh
-    ``horizon``-year simulation per distinct burn rate therefore serves every
-    regen sub-cohort, and the lineage's decade slice is read at its
-    ``elapsed_years`` offset. The trajectory applies the same year-by-year
-    float operations ``simulate_cohort_years`` would run on the carried state,
-    so the replay stays bit-identical to the per-decade simulation (the
-    ``burned_before`` carry is unused for regen lineages: they salvage nothing,
-    and ``burn_influx`` depends only on live volume).
+    A regenerated lineage without an explicit regen event and without a prior
+    harvest carries no harvest or salvage, so from its fresh formation state
+    (``live=1``, ``burned=0``) its inventory follows one recurrence that
+    depends only on the burn rate. A single fresh ``horizon``-year simulation
+    per distinct burn rate therefore serves every such regen sub-cohort, and
+    the lineage's decade slice is read at its ``elapsed_years`` offset. The
+    trajectory applies the same year-by-year float operations
+    ``simulate_cohort_years`` would run on the carried state, so the replay
+    stays bit-identical to the per-decade simulation (the ``burned_before``
+    carry is unused for these lineages: they salvage nothing, and
+    ``burn_influx`` depends only on live volume).
     """
 
     trajectory = cache.get(lineage.burn_rate)

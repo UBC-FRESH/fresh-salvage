@@ -13,6 +13,7 @@ TSA29 bridge, stands, and yields (skips when unavailable).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from fresh_salvage.models import (
     AgentResult,
     AgentYearVolumes,
     AgeSmashing,
+    Economics,
     PrincipalResult,
     RHManifest,
     RHResult,
@@ -569,6 +571,304 @@ def test_replay_missing_age_cap_fails_fast() -> None:
         )
 
     assert excinfo.value.code == "single_pass_curve_age_cap_missing"
+
+
+# --- regenerated cohorts from the WS3 schedule (Q3 correction) -------------
+
+
+def _regen_spec(
+    *,
+    cohort_id: str = "regen:managed:2901000:sbps_pli:2921000:b1:a10",
+    period: int = 2,
+    age: int = 10,
+    birth_period: int = 1,
+    area: float = 50.0,
+    volume: float = 5_000.0,
+    implemented_periods: int = 4,
+) -> rh.RegeneratedCohortSpec:
+    period_volumes = tuple(
+        volume if index == period - 1 else 0.0
+        for index in range(implemented_periods)
+    )
+    return rh.RegeneratedCohortSpec(
+        cohort_id=cohort_id,
+        tsa="29",
+        ifm="managed",
+        au_id="2901000",
+        stratum_code=STRATUM,
+        curve_id=CURVE_ID,
+        period=period,
+        age=age,
+        birth_period=birth_period,
+        availability_year=(period - 1) * 10,
+        area_ha=area,
+        volume_m3=volume,
+        period_volumes=period_volumes,
+    )
+
+
+def _regen_prices() -> tuple[dict, dict]:
+    return (
+        {"SPF_SBPS": {"burn_share": 0.1, "burned_price": 40.0}},
+        {"SPF_SBPS": {"green_price": 120.0, "burned_price": 40.0}},
+    )
+
+
+def test_regenerated_lp_cohorts_use_scheduled_area_and_volume() -> None:
+    spec = _regen_spec(area=100.0, volume=10_000.0)
+    economics = Economics(subsidy_rate_per_m3=24.10)
+    principal_prices, agent_prices = _regen_prices()
+
+    cohorts_p = single_pass._regenerated_principal_cohorts(
+        [spec],
+        economics=economics,
+        price_by_dt=principal_prices,
+        curves=_curves(),
+        horizon=20,
+        period_length=10,
+    )
+    cohorts_a = single_pass._regenerated_agent_cohorts(
+        [spec],
+        price_by_dt=agent_prices,
+        curves=_curves(),
+        horizon=20,
+        period_length=10,
+    )
+
+    assert len(cohorts_p) == len(cohorts_a) == 1
+    cohort_p = cohorts_p[0]
+    assert cohort_p.cohort_id == spec.cohort_id
+    assert cohort_p.area_ha == 100.0
+    assert cohort_p.green_volume_m3 == 10_000.0
+    assert cohort_p.burned_volume_m3 == 0.0
+    assert cohort_p.burn_rate == 0.0
+    assert cohort_p.cashflow == 10_000.0 * economics.green_stumpage_rate
+    assert cohort_p.decadal_volume_scale == (100.0, 100.0)
+    cohort_a = cohorts_a[0]
+    assert cohort_a.standing_volume_m3 == 10_000.0
+    assert cohort_a.burn_rate == 0.0
+    assert cohort_a.green_price_m3 == 120.0
+    assert cohort_a.decadal_volume_scale == (100.0, 100.0)
+
+
+def test_regenerated_cohort_is_inactive_outside_its_scheduled_period() -> None:
+    spec = _regen_spec(period=2, area=100.0, volume=10_000.0)
+    economics = Economics(subsidy_rate_per_m3=24.10)
+    principal_prices, agent_prices = _regen_prices()
+    ceilings = rh.annual_ceiling_matrix(
+        {spec.cohort_id: spec.period_volumes}, 10
+    )[spec.cohort_id]
+
+    assert ceilings[:10] == (0.0,) * 10
+    assert ceilings[10:20] == (1_000.0,) * 10
+    assert ceilings[20:] == (0.0,) * 20
+
+    cohort_p = single_pass._regenerated_principal_cohorts(
+        [spec],
+        economics=economics,
+        price_by_dt=principal_prices,
+        curves=_curves(),
+        horizon=40,
+        period_length=10,
+    )
+    principal_result = principal.solve_principal(
+        cohort_p,
+        horizon=40,
+        aac_annual_m3=1_000_000.0,
+        decay_rate=0.85,
+        cohort_ceilings_m3=[ceilings],
+        period_length=10,
+        grade_clock_period=10,
+        burned_stock_reset=True,
+    )
+    offers = {offer.year: offer.offer_fraction for offer in principal_result.offers}
+    assert all(offers[year] == 0.0 for year in range(1, 11))
+    assert all(offers[year] == pytest.approx(0.1) for year in range(11, 21))
+    assert all(offers[year] == 0.0 for year in range(21, 41))
+
+    cohort_a = single_pass._regenerated_agent_cohorts(
+        [spec],
+        price_by_dt=agent_prices,
+        curves=_curves(),
+        horizon=40,
+        period_length=10,
+    )
+    agent_result = agent.solve_agent(
+        cohort_a,
+        [tuple(offers[year] for year in range(1, 41))],
+        horizon=40,
+        decay_rate=0.85,
+        discount_rate=0.03,
+        economics=economics,
+        period_length=10,
+        grade_clock_period=10,
+        burned_stock_reset=True,
+    )
+    harvests = {
+        decision.year: decision.harvest_fraction
+        for decision in agent_result.decisions
+    }
+    assert all(harvests[year] == 0.0 for year in range(1, 11))
+    assert all(harvests[year] == pytest.approx(0.1) for year in range(11, 21))
+    assert all(harvests[year] == 0.0 for year in range(21, 41))
+
+
+def test_regenerated_ceiling_binds_at_availability() -> None:
+    spec = _regen_spec(period=2, area=100.0, volume=10_000.0)
+    economics = Economics(subsidy_rate_per_m3=24.10)
+    principal_prices, _agent_prices = _regen_prices()
+    ceiling = rh.annual_ceiling_matrix(
+        {spec.cohort_id: spec.period_volumes}, 10
+    )[spec.cohort_id]
+    half_ceiling = tuple(value / 2.0 for value in ceiling)
+    cohort_p = single_pass._regenerated_principal_cohorts(
+        [spec],
+        economics=economics,
+        price_by_dt=principal_prices,
+        curves=_curves(),
+        horizon=40,
+        period_length=10,
+    )
+
+    result = principal.solve_principal(
+        cohort_p,
+        horizon=40,
+        aac_annual_m3=1_000_000.0,
+        decay_rate=0.85,
+        cohort_ceilings_m3=[half_ceiling],
+        period_length=10,
+        grade_clock_period=10,
+        burned_stock_reset=True,
+    )
+
+    assert sum(offer.offer_fraction for offer in result.offers) == pytest.approx(0.5)
+
+
+def test_replay_regenerated_event_links_to_the_origin_pool() -> None:
+    # The t=0 cohort is fully harvested in decade 1, so its whole area forms
+    # the period-1 regen pool. The period-2 regen cohort claims 50% of that
+    # pool; the event must remove exactly that area and regenerate it at the
+    # boundary, never adding a second copy of the parent area.
+    state = _state([_row(65, 100.0)])
+    harvests = [(1.0,) + (0.0,) * 19]
+    salvages = [(0.0,) * 20]
+    spec = _regen_spec(period=2, age=10, birth_period=1, area=50.0)
+    schedules = {spec.cohort_id: (0.0,) * 10 + (0.1,) * 10}
+
+    replay = single_pass.replay_lineage(
+        state,
+        harvests=harvests,
+        salvages=salvages,
+        steps=2,
+        period_length=10,
+        decay_rate=0.85,
+        age_caps=_age_caps(),
+        regeneration_age=5,
+        regenerated_cohorts=(spec,),
+        regenerated_harvests=schedules,
+    )
+
+    for snapshot in replay.snapshots:
+        assert snapshot["area_ha"].sum() == pytest.approx(100.0, rel=1e-12)
+    first = replay.snapshots[1]
+    assert first.set_index("age")["area_ha"].loc[5] == pytest.approx(100.0)
+    second = replay.snapshots[2].set_index("age")["area_ha"]
+    event_years = fire.simulate_cohort_years(
+        initial_live=1.0,
+        burn_rate=BURN_RATE,
+        harvest_schedule=(0.05,) * 10,
+        salvage_schedule=(0.0,) * 10,
+        decay_rate=0.85,
+    )
+    live_end = event_years[-1].live_after
+    assert second.loc[15] == pytest.approx(100.0 * live_end, rel=1e-12)
+    assert second.loc[5] == pytest.approx(100.0 * (1.0 - live_end), rel=1e-12)
+    assert replay.area_harvested_ha[0] == pytest.approx(100.0)
+    assert replay.area_harvested_ha[1] == pytest.approx(50.0)
+
+
+def test_replay_regenerated_claim_above_the_pool_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    harvests = [(1.0,) + (0.0,) * 19]
+    salvages = [(0.0,) * 20]
+    spec = _regen_spec(period=2, age=10, birth_period=1, area=200.0)
+    schedules = {spec.cohort_id: (0.0,) * 10 + (0.1,) * 10}
+
+    with pytest.raises(single_pass.SinglePassError) as excinfo:
+        single_pass.replay_lineage(
+            state,
+            harvests=harvests,
+            salvages=salvages,
+            steps=2,
+            period_length=10,
+            decay_rate=0.85,
+            age_caps=_age_caps(),
+            regeneration_age=5,
+            regenerated_cohorts=(spec,),
+            regenerated_harvests=schedules,
+        )
+
+    assert excinfo.value.code == "single_pass_regen_area_unavailable"
+
+
+def test_replay_regenerated_schedule_missing_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    harvests, salvages = _schedules(1, 2, 10)
+    spec = _regen_spec()
+
+    with pytest.raises(single_pass.SinglePassError) as excinfo:
+        single_pass.replay_lineage(
+            state,
+            harvests=harvests,
+            salvages=salvages,
+            steps=2,
+            period_length=10,
+            decay_rate=0.85,
+            age_caps=_age_caps(),
+            regeneration_age=5,
+            regenerated_cohorts=(spec,),
+        )
+
+    assert excinfo.value.code == "single_pass_regen_schedule_missing"
+
+
+def test_replay_regenerated_fraction_above_one_fails_fast() -> None:
+    state = _state([_row(65, 100.0)])
+    harvests = [(1.0,) + (0.0,) * 19]
+    salvages = [(0.0,) * 20]
+    spec = _regen_spec(period=2, age=10, birth_period=1, area=50.0)
+    schedules = {spec.cohort_id: (0.0,) * 10 + (0.2,) * 10}
+
+    with pytest.raises(single_pass.SinglePassError) as excinfo:
+        single_pass.replay_lineage(
+            state,
+            harvests=harvests,
+            salvages=salvages,
+            steps=2,
+            period_length=10,
+            decay_rate=0.85,
+            age_caps=_age_caps(),
+            regeneration_age=5,
+            regenerated_cohorts=(spec,),
+            regenerated_harvests=schedules,
+        )
+
+    assert excinfo.value.code == "single_pass_regen_fraction_invalid"
+
+
+def test_regenerated_diagnostics_record_the_constructed_cohorts() -> None:
+    spec = _regen_spec()
+
+    diagnostics = single_pass._regenerated_diagnostics((spec,))
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.code == "single_pass_regenerated_cohorts"
+    assert diagnostic.context["cohorts"] == 1
+    assert diagnostic.context["area_ha"] == pytest.approx(50.0)
+    assert diagnostic.context["scheduled_volume_m3"] == pytest.approx(5_000.0)
+    assert diagnostic.context["periods"] == [2]
+    assert diagnostic.context["birth_periods"] == [1]
 
 
 # --- objective decompositions ----------------------------------------------
@@ -1535,6 +1835,9 @@ STAGE1_YIELDS_PATH = Path(
     "/srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/"
     "femic-tsa29-instance/output/woodstock_tsa29_validated/woodstock_yields.csv"
 )
+CORRECTED_BRIDGE_PATH = Path(
+    os.environ.get("FRESH_SALVAGE_CORRECTED_BRIDGE", "")
+)
 
 
 def _require_integration_inputs() -> None:
@@ -1629,3 +1932,73 @@ def test_real_data_single_pass_steps2_replay_smoke(tmp_path: Path) -> None:
     assert rh.read_cohort_table(state_dir / "step_02.are")[
         "area_ha"
     ].to_numpy() == pytest.approx(final_state["area_ha"].to_numpy(), rel=1e-12)
+
+
+@pytest.mark.skipif(
+    os.environ.get("FRESH_SALVAGE_Q3_REGEN_INTEGRATION") != "1",
+    reason="set FRESH_SALVAGE_Q3_REGEN_INTEGRATION=1 to run the corrected-bridge Q3 smoke",
+)
+def test_corrected_bridge_single_pass_represents_period9_regenerated_harvest(
+    tmp_path: Path,
+) -> None:
+    """Gated smoke: the corrected TSA29 bridge's period-9 regen harvest runs.
+
+    Gate with ``FRESH_SALVAGE_Q3_REGEN_INTEGRATION=1`` and
+    ``FRESH_SALVAGE_CORRECTED_BRIDGE=<corrected pre-smashed bridge dir>``.
+    The corrected land base makes WS3 reharvest 97 regeneration-lattice rows
+    (7 dedup groups, 36,437 ha, 9.86M m3) in period 9. ``steps=9`` implements
+    exactly through that period, so this is the cheapest real end-to-end path
+    that exercises explicit regen cohort construction, the LP availability
+    window, and the replay's origin-pool event. Full 10-decade Q3 evidence is
+    run separately at subsidy $24.10 and $21.50.
+    """
+
+    _require_integration_inputs()
+    if not os.environ.get("FRESH_SALVAGE_CORRECTED_BRIDGE"):
+        pytest.skip(
+            "set FRESH_SALVAGE_CORRECTED_BRIDGE to the corrected pre-smashed "
+            "bridge directory"
+        )
+    if not CORRECTED_BRIDGE_PATH.is_dir():
+        pytest.skip(f"corrected bridge unavailable: {CORRECTED_BRIDGE_PATH}")
+
+    config = RHRunConfig(
+        run_id="q3-regen-sp-steps9",
+        stands_path=STANDS_PATH,
+        yields_path=STAGE1_YIELDS_PATH,
+        bridge_path=CORRECTED_BRIDGE_PATH,
+        base_year=2025,
+        horizon=15,
+        period_length=10,
+        steps=9,
+        workers=1,
+        planning_mode="single_pass",
+        burned_stock_reset=True,
+        subsidy_rate_per_m3=24.10,
+        output_root=tmp_path / "sp9",
+    )
+
+    result = single_pass.run_single_pass(config)
+
+    assert result.status == "optimal"
+    regenerated = [
+        diagnostic
+        for diagnostic in result.diagnostics
+        if diagnostic.code == "single_pass_regenerated_cohorts"
+    ]
+    assert len(regenerated) == 1
+    context = regenerated[0].context
+    assert context["periods"] == [9]
+    assert context["cohorts"] == 7
+    assert float(context["area_ha"]) == pytest.approx(36_437.071545, rel=1e-6)
+    assert float(context["scheduled_volume_m3"]) == pytest.approx(
+        9_856_940.0569593, rel=1e-6
+    )
+    assert sum(result.step_records[8].annual_green_harvest_m3) > 0.0
+    initial_snapshot = rh.read_cohort_table(
+        tmp_path / "sp9" / "derived" / "rh_state" / "step_00.are"
+    )
+    final_state = pd.read_csv(result.final_state_path)
+    assert final_state["area_ha"].sum() == pytest.approx(
+        initial_snapshot["area_ha"].sum(), rel=1e-6
+    )

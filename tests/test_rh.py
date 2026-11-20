@@ -611,6 +611,115 @@ def test_schedule_volumes_regenerated_harvest_fails_fast() -> None:
     assert "period-7" in str(excinfo.value)
 
 
+def test_schedule_period_volumes_builds_explicit_regenerated_cohorts() -> None:
+    # Period-1 clear-cut area regenerates at age 0; in period 3 it is age 20
+    # (0 mod 10), so the period-3 rows are an explicit regen cohort. The two
+    # rows of the same dedup group sum to one cohort area/volume.
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule(
+        [
+            (1, DTYPE_KEY, 65, 10.0, "cc", 1_000.0),
+            (3, DTYPE_KEY, 20, 4.0, "cc", 400.0),
+            (3, DTYPE_KEY, 20, 6.0, "cc", 600.0),
+        ]
+    )
+
+    mapping = rh.schedule_period_volumes(
+        schedule,
+        "cc",
+        state,
+        implemented_periods=4,
+        period_length=10,
+        age_smashing=SMASHING,
+    )
+
+    assert mapping.initial[_cohort_id(65)] == (1_000.0, 0.0, 0.0, 0.0)
+    assert len(mapping.regenerated) == 1
+    spec = mapping.regenerated[0]
+    assert spec.cohort_id == "regen:managed:2901000:sbps_pli:2921000:b1:a20"
+    assert spec.period == 3
+    assert spec.age == 20
+    assert spec.birth_period == 1
+    assert spec.availability_year == 20
+    assert spec.area_ha == pytest.approx(10.0)
+    assert spec.volume_m3 == pytest.approx(1_000.0)
+    assert spec.period_volumes == (0.0, 0.0, 1_000.0, 0.0)
+
+
+def test_schedule_period_volumes_splits_distinct_birth_periods() -> None:
+    # Period 4 age 30 was cut in period 1; period 4 age 10 was cut in period 3.
+    # Both are regeneration-lattice rows with different birth periods.
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule(
+        [
+            (4, DTYPE_KEY, 30, 5.0, "cc", 500.0),
+            (4, DTYPE_KEY, 10, 7.0, "cc", 700.0),
+        ]
+    )
+
+    mapping = rh.schedule_period_volumes(
+        schedule,
+        "cc",
+        state,
+        implemented_periods=4,
+        period_length=10,
+        age_smashing=SMASHING,
+    )
+
+    assert sorted(
+        (spec.birth_period, spec.age) for spec in mapping.regenerated
+    ) == [(1, 30), (3, 10)]
+    assert [spec.period for spec in mapping.regenerated] == [4, 4]
+    assert all(spec.availability_year == 30 for spec in mapping.regenerated)
+
+
+@pytest.mark.parametrize(
+    ("row", "code"),
+    [
+        ((2, DTYPE_KEY, 20, 10.0, "cc", 100.0), "rh_schedule_regenerated_birth_invalid"),
+        ((2, DTYPE_KEY, 0, 10.0, "cc", 100.0), "rh_schedule_regenerated_birth_invalid"),
+        ((2, DTYPE_KEY, 10, -1.0, "cc", 100.0), "rh_schedule_area_invalid"),
+        ((2, DTYPE_KEY, 10, float("nan"), "cc", 100.0), "rh_schedule_area_invalid"),
+        ((2, DTYPE_KEY, 10, 10.0, "cc", float("nan")), "rh_schedule_volume_invalid"),
+        ((2, DTYPE_KEY, 10, 10.0, "cc", -1.0), "rh_schedule_volume_invalid"),
+        ((2, DTYPE_KEY, 13, 10.0, "cc", 100.0), "rh_schedule_off_lattice"),
+    ],
+)
+def test_schedule_period_volumes_malformed_regenerated_rows_fail_fast(
+    row: tuple, code: str
+) -> None:
+    state = _state([_row(65, 100.0)])
+
+    with pytest.raises(rh.RHError) as excinfo:
+        rh.schedule_period_volumes(
+            _schedule([row]),
+            "cc",
+            state,
+            implemented_periods=4,
+            period_length=10,
+            age_smashing=SMASHING,
+        )
+
+    assert excinfo.value.code == code
+
+
+def test_schedule_period_volumes_ignore_regenerated_rows_beyond_horizon() -> None:
+    state = _state([_row(65, 100.0)])
+    schedule = _schedule([(2, DTYPE_KEY, 10, 10.0, "cc", 1_000.0)])
+
+    mapping = rh.schedule_period_volumes(
+        schedule,
+        "cc",
+        state,
+        implemented_periods=1,
+        period_length=10,
+        age_smashing=SMASHING,
+    )
+
+    assert mapping.regenerated == ()
+    assert mapping.initial[_cohort_id(65)] == (0.0,)
+
+
 def test_schedule_volumes_unknown_initial_cohort_fails_fast() -> None:
     state = _state([_row(65, 100.0)])
     # Period 2 at age 85 implies a t=0 cohort of age 75, absent from state.
