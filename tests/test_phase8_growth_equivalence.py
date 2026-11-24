@@ -164,7 +164,7 @@ def _agent_cohorts(*, growth: bool) -> list[agent.AgentCohort]:
 
 def _reduced_principal_lp():
     return principal.build_principal_lp(
-        _principal_cohorts(growth=True),
+        _principal_cohorts(growth=True, subsidy=0.0),
         horizon=HORIZON,
         aac_annual_m3=5_000.0,
         cohort_ceilings_m3=[400.0, 0.0],
@@ -176,7 +176,7 @@ def _reduced_principal_lp():
 
 def _static_principal_lp():
     return principal.build_principal_lp(
-        _principal_cohorts(growth=False),
+        _principal_cohorts(growth=False, subsidy=0.0),
         horizon=HORIZON,
         aac_annual_m3=5_000.0,
         cohort_ceilings_m3=[400.0, 0.0],

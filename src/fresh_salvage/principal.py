@@ -11,17 +11,16 @@ linear descendant of the binary ``P_RH_Version.py``) maximizes, per stand
               - loss_of_burned_wood_{s,y} * (1 - cum_offer_{s,y})
 
 with ``cum_offer_{s,y} = sum_{t<=y} offer_{s,t}``,
-``principal_cashflow_s = green_vol*green_stumpage + burned_vol*burned_stumpage``,
+``principal_cashflow_s = green_vol*green_stumpage + burned_vol*(burned_stumpage - subsidy)``,
 and ``loss_of_burned_wood_{s,y}`` is the expected
 annual burned-value loss, subject to
 ``sum_y offer_{s,y} <= 1`` (offer once) and per-year AAC / green / burned
 volume ceilings.
 
-The predecessor also subtracted ``burned_vol*subsidy`` from the offer
-cashflow. Here the principal's offer objective excludes the subsidy and the
-subsidy is charged ex post on realized salvage, matching the agent's subsidy
-basis (``agent.py``); the principal cannot observe realized salvage when it
-chooses offers.
+Stage 1 includes the anticipated subsidy on the offered burned volume. Stage 2
+settles the actual subsidy on realized salvage in ``rh.py`` / ``single_pass.py``.
+The two are deliberately separate: the principal has not observed the agent's
+response when it chooses offers.
 
 Formulation as implemented
 --------------------------
@@ -851,14 +850,13 @@ def _principal_offer_coefficients(
         value / volume if volume > 0.0 else 0.0
         for value, volume in zip(annual_burned_values, annual_burned_volume, strict=True)
     )
-    # The principal's offer-stage objective excludes the subsidy: the principal
-    # cannot observe the agent's realized salvage when it chooses offers, and
-    # the subsidy is charged ex post on realized salvage (rh.py /
-    # single_pass.py). Charging it to the offer fraction would bill the
-    # principal for authorization rather than recovery.
+    # Stage 1 anticipates full acceptance: the principal budgets the subsidy on
+    # the offered burned volume. The actual payment is settled on realized
+    # salvage in rh.py / single_pass.py; do not subtract the realized subsidy
+    # here.
     annual_offer = tuple(
         green_year * (1.0 - cohort.burn_rate) ** year * cohort.green_stumpage_rate
-        + volume * cohort.burned_stumpage_rate
+        + volume * (cohort.burned_stumpage_rate - cohort.subsidy_rate_per_m3)
         for year, (green_year, volume) in enumerate(
             zip(green_by_year, annual_burned_volume, strict=True)
         )

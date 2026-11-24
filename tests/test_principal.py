@@ -101,7 +101,7 @@ def test_offer_coefficients_precompute_fire_and_decay_by_offer_year() -> None:
 
     assert coefficients.annual_burned_volume_m3 == pytest.approx((10.0, 17.0, 22.1))
     assert coefficients.annual_burned_price_m3 == pytest.approx((100.0, 87.0, 77.05))
-    assert coefficients.annual_offer == pytest.approx((1502.5, 1354.25, 1220.525))
+    assert coefficients.annual_offer == pytest.approx((1472.5, 1303.25, 1154.225))
     assert coefficients.annual_burn_loss == pytest.approx(
         (0.0, 22.185, 47.25283875)
     )
@@ -128,7 +128,7 @@ def test_principal_lp_uses_annual_coefficients_without_new_columns() -> None:
     built = principal.build_principal_lp([cohort], horizon=3, decay_rate=0.85)
     costs = built.model.getLp().col_cost_
 
-    assert list(costs[:3]) == pytest.approx((1502.5, 1354.25, 1220.525))
+    assert list(costs[:3]) == pytest.approx((1472.5, 1303.25, 1154.225))
     assert list(costs[3:]) == pytest.approx((0.0, 22.185, 47.25283875))
     assert built.model.getNumCol() == 2 * 3
 
@@ -154,7 +154,7 @@ def test_fire_free_unit_decay_preserves_legacy_offer_coefficients() -> None:
     coefficients = principal._principal_offer_coefficients(cohort, 3, 1.0)
 
     assert coefficients.annual_burned_volume_m3 == pytest.approx((10.0, 10.0, 10.0))
-    assert coefficients.annual_offer == pytest.approx((1502.5, 1502.5, 1502.5))
+    assert coefficients.annual_offer == pytest.approx((1472.5, 1472.5, 1472.5))
     assert coefficients.annual_burn_loss == pytest.approx((0.0, 0.0, 0.0))
 
 
@@ -736,7 +736,7 @@ def test_growth_scales_principal_annual_coefficients() -> None:
         (100.0, 170.0, 221.0, 325.55)
     )
     assert coefficients.annual_offer == pytest.approx(
-        (15025.0, 13542.5, 24355.25, 21951.3875)
+        (14725.0, 13032.5, 23692.25, 20974.7375)
     )
     assert coefficients.annual_burn_loss == pytest.approx(
         (0.0, 51.0, 122.655, 251.2432125)
@@ -758,7 +758,7 @@ def test_burned_stock_reset_reseeds_and_restarts_the_decay_exponent() -> None:
     )
     assert coefficients.annual_burn_loss == pytest.approx((0.0, 51.0, 0.0, 92.31))
     assert coefficients.annual_offer == pytest.approx(
-        (15025.0, 13542.5, 24350.0, 21946.925)
+        (14725.0, 13032.5, 23750.0, 21023.825)
     )
 
 
