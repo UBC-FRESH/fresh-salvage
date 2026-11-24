@@ -379,6 +379,10 @@ def build_principal_lp(
         _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
     ]
     green_by_year = np.array([green for green, _burned in year_volumes])
+    # The optional burned cap keeps its historical basis: the static/decadal
+    # burned volume, not the year's available B_{y-1} + I_y. The stage-1
+    # subsidy coefficient uses the available volume (see
+    # ``_principal_offer_coefficients`` and ``solve_principal``).
     burned_by_year = np.array([burned for _green, burned in year_volumes])
 
     model = highspy.Highs()
@@ -403,6 +407,7 @@ def build_principal_lp(
             period_length=period_length,
             grade_clock_period=grade_clock_period,
             burned_stock_reset=burned_stock_reset,
+            include_influx=True,
         )
         costs[base : base + horizon] = coefficients.annual_offer
         for year, loss in enumerate(coefficients.annual_burn_loss):
@@ -527,6 +532,16 @@ def solve_principal(
     year_volumes = [
         _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
     ]
+    burned_by_year = [
+        _cohort_year_available_burned(
+            cohort,
+            horizon,
+            decay_rate,
+            period_length,
+            burned_stock_reset=burned_stock_reset,
+        )
+        for cohort in cohorts
+    ]
     offers: list[PrincipalOfferRecord] = []
     green_offered = np.zeros(horizon)
     burned_offered = np.zeros(horizon)
@@ -536,9 +551,9 @@ def solve_principal(
         if fraction > OFFER_REPORTING_TOLERANCE:
             offered_cohort_years += 1
         cohort = cohorts[c_index]
-        green_year, burned_year = year_volumes[c_index]
+        green_year, _burned_year = year_volumes[c_index]
         green_offered[year] += fraction * float(green_year[year])
-        burned_offered[year] += fraction * float(burned_year[year])
+        burned_offered[year] += fraction * float(burned_by_year[c_index][year])
         offers.append(
             PrincipalOfferRecord(
                 cohort_id=cohort.cohort_id,
@@ -765,6 +780,7 @@ def _principal_offer_coefficients(
     period_length: int | None = None,
     grade_clock_period: int | None = None,
     burned_stock_reset: bool = False,
+    include_influx: bool = False,
 ) -> PrincipalOfferCoefficients:
     """Precompute deterministic fire/decay coefficients for offer years.
 
@@ -772,6 +788,11 @@ def _principal_offer_coefficients(
     resulting state at that year supplies the direct offer coefficient and the
     annual burned-value coefficient. This is a marginal, predetermined path;
     it does not add fire or inventory state variables to the principal LP.
+
+    ``include_influx`` values the burned volume available for salvage in the
+    offer year, ``B_{y-1} + I_y``, instead of the start-of-year inventory
+    ``B_{y-1}``. The stage-1 subsidy budget uses the available volume so the
+    offer cannot underbudget salvage of the current year's fire influx.
 
     Under ``decadal_volume_scale`` the path values every decade at its per-ha
     volume, so burn influx in decade ``k`` is ``R * live_area * v_k``.
@@ -811,10 +832,24 @@ def _principal_offer_coefficients(
         cohort.subsidy_rate_per_m3,
     )
     if any(value is None for value in configured_economics):
+        available_burned = (
+            tuple(
+                _annual_burned_volumes(
+                    cohort,
+                    horizon,
+                    decay_rate,
+                    period_length=period_length,
+                    burned_stock_reset=burned_stock_reset,
+                    include_influx=True,
+                )
+            )
+            if include_influx
+            else tuple(static_burned_by_year)
+        )
         burned_values = _annual_burned_values(
             cohort,
             horizon,
-            burned_volumes=tuple(static_burned_by_year),
+            burned_volumes=available_burned,
             grade_clock_period=grade_clock_period,
         )
         losses = tuple(
@@ -822,12 +857,10 @@ def _principal_offer_coefficients(
             for value, exponent in zip(burned_values, exponents, strict=True)
         )
         return PrincipalOfferCoefficients(
-            annual_burned_volume_m3=tuple(static_burned_by_year),
+            annual_burned_volume_m3=available_burned,
             annual_burned_price_m3=tuple(
                 value / volume if volume > 0.0 else 0.0
-                for value, volume in zip(
-                    burned_values, static_burned_by_year, strict=True
-                )
+                for value, volume in zip(burned_values, available_burned, strict=True)
             ),
             annual_offer=tuple(
                 cohort.cashflow * factor
@@ -842,6 +875,7 @@ def _principal_offer_coefficients(
         decay_rate,
         period_length=period_length,
         burned_stock_reset=burned_stock_reset,
+        include_influx=include_influx,
     )
     annual_burned_values = _annual_burned_values(
         cohort, horizon, annual_burned_volume, grade_clock_period=grade_clock_period
@@ -953,6 +987,34 @@ def _cohort_year_volumes(
     return green, burned
 
 
+def _cohort_year_available_burned(
+    cohort: PrincipalCohort,
+    horizon: int,
+    decay_rate: float,
+    period_length: int | None,
+    *,
+    burned_stock_reset: bool = False,
+) -> np.ndarray:
+    """Return the burned volume available for salvage in every LP year.
+
+    Year ``y`` carries ``B_{y-1} + I_y``: the start-of-year burned inventory
+    plus that year's fire influx. This is the volume the agent can salvage
+    under full acceptance, so it is the principal's stage-1 subsidy base.
+    """
+
+    return np.array(
+        _annual_burned_volumes(
+            cohort,
+            horizon,
+            decay_rate,
+            period_length=period_length,
+            burned_stock_reset=burned_stock_reset,
+            include_influx=True,
+        ),
+        dtype=float,
+    )
+
+
 def _relative_green_volumes(
     cohort: PrincipalCohort, green_by_year: np.ndarray
 ) -> tuple[float, ...]:
@@ -990,8 +1052,14 @@ def _annual_burned_volumes(
     *,
     period_length: int | None = None,
     burned_stock_reset: bool = False,
+    include_influx: bool = False,
 ) -> list[float]:
-    """Return burned inventory available at each possible offer year (m3).
+    """Return burned inventory at each possible offer year (m3).
+
+    With ``include_influx`` the return is the volume available for salvage in
+    the year, ``B_{y-1} + I_y``; without it, the start-of-year inventory
+    ``B_{y-1}``. The subsidy/offer cashflow uses the available volume so the
+    principal's stage-1 budget is an upper bound on realized salvage.
 
     Without a ``decadal_volume_scale`` this is the static t=0 path (live
     volume in m3). With one, the burn influx of decade ``k`` is
@@ -1015,8 +1083,8 @@ def _annual_burned_volumes(
         for year in range(horizon):
             if burned_stock_reset and year > 0 and year % period_length == 0:
                 burned = _reseeded_burned_volume(cohort, per_ha, year, period_length)
-            volumes.append(burned)
             influx = fire.burn_influx(live, cohort.burn_rate)
+            volumes.append(burned + influx if include_influx else burned)
             live = fire.live_volume_after(live, 0.0, influx)
             burned = fire.burned_volume_after(burned, influx, 0.0, decay_rate)
         return volumes
@@ -1029,7 +1097,6 @@ def _annual_burned_volumes(
         decade = min(year // period_length, len(per_ha) - 1)
         if burned_stock_reset and year > 0 and year % period_length == 0:
             burned = _reseeded_burned_volume(cohort, per_ha, year, period_length)
-        volumes.append(burned)
         influx_basis = fire.burn_influx(live_basis, cohort.burn_rate)
         live_basis = fire.live_volume_after(live_basis, 0.0, influx_basis)
         # Burn influx in decade k is ``R * live_basis * v_k``: the live basis
@@ -1047,6 +1114,7 @@ def _annual_burned_volumes(
             )
         else:
             influx = influx_basis * float(per_ha[decade])
+        volumes.append(burned + influx if include_influx else burned)
         burned = fire.burned_volume_after(burned, influx, 0.0, decay_rate)
     return volumes
 

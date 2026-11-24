@@ -107,6 +107,33 @@ def test_offer_coefficients_precompute_fire_and_decay_by_offer_year() -> None:
     )
 
 
+def test_offer_coefficients_can_value_available_burned_volume() -> None:
+    cohort = PrincipalCohort(
+        cohort_id="available-burned",
+        stratum_code="sbps_pli",
+        development_type="SPF_SBPS",
+        area_ha=1.0,
+        green_volume_m3=100.0,
+        burned_volume_m3=10.0,
+        cashflow=1_472.5,
+        burned_value=1_000.0,
+        burn_rate=0.1,
+        burned_grade_mix=(1.0, 0.0, 0.0, 0.0),
+        burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
+        green_stumpage_rate=15.0,
+        burned_stumpage_rate=0.25,
+        subsidy_rate_per_m3=3.0,
+    )
+
+    coefficients = principal._principal_offer_coefficients(
+        cohort, 3, 0.85, include_influx=True
+    )
+
+    # B_{y-1} + I_y: 10 + 10, 17 + 9, 22.1 + 8.1.
+    assert coefficients.annual_burned_volume_m3 == pytest.approx((20.0, 26.0, 30.2))
+    assert coefficients.annual_offer == pytest.approx((1_445.0, 1_278.5, 1_131.95))
+
+
 def test_principal_lp_uses_annual_coefficients_without_new_columns() -> None:
     cohort = PrincipalCohort(
         cohort_id="wired-fire-decay",
@@ -128,8 +155,8 @@ def test_principal_lp_uses_annual_coefficients_without_new_columns() -> None:
     built = principal.build_principal_lp([cohort], horizon=3, decay_rate=0.85)
     costs = built.model.getLp().col_cost_
 
-    assert list(costs[:3]) == pytest.approx((1472.5, 1303.25, 1154.225))
-    assert list(costs[3:]) == pytest.approx((0.0, 22.185, 47.25283875))
+    assert list(costs[:3]) == pytest.approx((1445.0, 1278.5, 1131.95))
+    assert list(costs[3:]) == pytest.approx((0.0, 33.93, 64.5717525))
     assert built.model.getNumCol() == 2 * 3
 
 
