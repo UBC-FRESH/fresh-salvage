@@ -43,13 +43,17 @@ objective coefficients, so no area/volume unit mixing is possible)::
 
     live_t:      V[c,t] = V[c,t-1] - H[c,t] - R * (V[c,t-1] - H[c,t])
     burned_t:    B[c,t] = (B[c,t-1] + R * (V[c,t-1] - H[c,t]) - S[c,t]) * d
-    salvage_t:   S[c,t] <= B[c,t-1] + R * (V[c,t-1] - H[c,t])
+    salvage_t:   S[c,t] <= o[c,t] * (B[c,t-1] + R * (V[c,t-1] - H[c,t]))
     sell_once_c: sum_t H[c,t] + sum_t S[c,t] <= 1        (no double selling)
 
 Offered fractions are an *input* (Phase 5 wires the principal coupling):
-``H[c,t]`` and ``S[c,t]`` carry upper bounds ``offer[c,t]`` from either the
-uniform ``default_offer_fraction`` (1.0 = every cohort fully offered every
-year) or a principal offer table (``cohort_id``/``year``/``offer_fraction``).
+``H[c,t]`` carries the upper bound ``offer[c,t]`` and ``S[c,t]`` is capped
+by the offered share of the available burned volume, so the principal's
+anticipated subsidy base and the agent's realized salvage use the same
+``B[c,t-1] + BURN_IN[c,t]`` basis. At ``offer = 1`` the salvage row is the
+physical feasibility row. Offers come from either the uniform
+``default_offer_fraction`` (1.0 = every cohort fully offered every year) or a
+principal offer table (``cohort_id``/``year``/``offer_fraction``).
 
 Objective (maximize agent NPV, ``df_t = 1 / (1 + discount_rate) ** t``)::
 
@@ -491,6 +495,7 @@ def build_agent_lp(
             salvage_col = salvage_offset + base + year
             live_col = live_offset + base + year
             burned_col = burned_offset + base + year
+            offer_fraction = float(offered[year])
             if year == 0:
                 # Initial conditions V[c,0] = 1 and B[c,0] = seed fold into
                 # the right-hand sides via the fire.py dynamics primitives.
@@ -514,12 +519,16 @@ def build_agent_lp(
                     np.array([burned_col, harvest_col, salvage_col], dtype=np.int32),
                     np.array([1.0, decay_rate * rate, decay_rate]),
                 )
+                # The offer fraction scales the salvageable burned volume:
+                # S[c,0] <= o[c,0] * (seed + BURN_IN[0]). At o = 1 this is
+                # the physical feasibility row; at o < 1 it is the offered
+                # share of the burned stock the principal anticipates.
                 model.addRow(
                     -highspy.kHighsInf,
-                    salvage_rhs,
+                    offer_fraction * salvage_rhs,
                     2,
                     np.array([salvage_col, harvest_col], dtype=np.int32),
-                    np.array([1.0, rate]),
+                    np.array([1.0, offer_fraction * rate]),
                 )
                 continue
             previous_live_col = live_offset + base + year - 1
@@ -580,16 +589,26 @@ def build_agent_lp(
                     ]
                 ),
             )
-            # S[c,t] - r*B[c,t-1] - R*V[c,t-1] + R*H[c,t] <= reseed
+            # S[c,t] <= o[c,t] * (reseed + B[c,t-1] + R*V[c,t-1] - R*H[c,t])
+            # The offer fraction scales the available burned volume, matching
+            # the principal's anticipated salvage basis. At o = 1 this is the
+            # physical feasibility row.
             model.addRow(
                 -highspy.kHighsInf,
-                reseed,
+                offer_fraction * reseed,
                 4,
                 np.array(
                     [salvage_col, previous_burned_col, previous_live_col, harvest_col],
                     dtype=np.int32,
                 ),
-                np.array([1.0, -boundary_ratio, -rate, rate]),
+                np.array(
+                    [
+                        1.0,
+                        -offer_fraction * boundary_ratio,
+                        -offer_fraction * rate,
+                        offer_fraction * rate,
+                    ]
+                ),
             )
         # sell_once[c]: sum_t H[c,t] + sum_t S[c,t] <= 1
         indices = np.concatenate(

@@ -959,6 +959,24 @@ def test_seed_initial_burned_lifts_salvage_in_year_one() -> None:
     )
 
 
+def test_offer_fraction_scales_the_salvageable_burned_stock() -> None:
+    cohort = _seed_cohort("fractional-seed")
+
+    result = _solve(
+        [cohort],
+        horizon=3,
+        offers=[(0.5, 0.5, 0.5)],
+        seed_initial_burned=True,
+    )
+
+    # The stock is 0.2 * 100 = 20 m3; a 0.5 offer authorizes half of the
+    # remaining stock each year. Unsalvaged stock decays at 0.85, so the
+    # agent sells 10, then half of 8.5, then half of 3.6125.
+    assert [v.salvage_volume_m3 for v in result.per_year_volumes] == pytest.approx(
+        [10.0, 4.25, 1.80625]
+    )
+
+
 def test_seed_reapplies_at_each_decade_under_burned_stock_reset() -> None:
     cohort = _seed_cohort("reset-seed")
 
