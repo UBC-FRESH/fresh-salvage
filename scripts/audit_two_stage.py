@@ -43,8 +43,15 @@ def _manifest(root: Path) -> dict:
     return json.loads(Path(matches[-1]).read_text(encoding="utf-8"))
 
 
-def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], float]:
-    """Return ``(S^a, per-step S^a, max per-cohort cumulative violation)``."""
+def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], float, float]:
+    """Return ``(S^a, per-step S^a, max overrun, max unrealized)``.
+
+    The per-cohort comparison sums offered available burned volume and realized
+    salvage within each step. ``max overrun`` is positive when realized salvage
+    exceeds the anticipated base (a cap failure); ``max unrealized`` is the
+    largest positive anticipation gap. Under the offered-share cap the overrun
+    should be zero.
+    """
 
     economics = cfg.economics()
     stands = pd.read_parquet(cfg.stands_path)
@@ -72,14 +79,8 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
             economics=economics,
             burn_rate_multiplier=cfg.burn_rate_multiplier,
         )
-        by_id = {cohort.cohort_id: cohort for cohort in cohorts}
-        offers = pd.read_parquet(offer_files[-1])
-        step_total = 0.0
-        for cohort_id, year, fraction in zip(
-            offers["cohort_id"], offers["year"], offers["offer_fraction"]
-        ):
-            cohort = by_id[str(cohort_id)]
-            coefficients = principal._principal_offer_coefficients(
+        coefficients_by_id = {
+            cohort.cohort_id: principal._principal_offer_coefficients(
                 cohort,
                 cfg.period_length,
                 cfg.decay_rate,
@@ -88,6 +89,14 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
                 burned_stock_reset=cfg.burned_stock_reset,
                 include_influx=True,
             )
+            for cohort in cohorts
+        }
+        offers = pd.read_parquet(offer_files[-1])
+        step_total = 0.0
+        for cohort_id, year, fraction in zip(
+            offers["cohort_id"], offers["year"], offers["offer_fraction"]
+        ):
+            coefficients = coefficients_by_id[str(cohort_id)]
             index = int(year) - 1
             if not 0 <= index < len(coefficients.annual_burned_volume_m3):
                 continue
@@ -108,23 +117,28 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
                 key = (str(cohort_id), step)
                 violations[key] = violations.get(key, 0.0) - float(value)
 
-    max_violation = max(
+    max_overrun = max(
+        (-value for value in violations.values() if value < 0.0), default=0.0
+    )
+    max_unrealized = max(
         (value for value in violations.values() if value > 0.0), default=0.0
     )
-    return total, per_step, max_violation
+    return total, per_step, max_overrun, max_unrealized
 
 
 def _audit(config_path: Path) -> dict[str, float | str]:
     cfg = RHRunConfig.model_validate(yaml.safe_load(config_path.read_text()))
     root = Path(cfg.output_root)
     manifest = _manifest(root)
-    anticipated, per_step, max_violation = _anticipated(root, cfg)
+    anticipated, per_step, max_overrun, max_unrealized = _anticipated(root, cfg)
 
     realized = float(manifest["total_burned_harvest_m3"])
     green = float(manifest["total_green_harvest_m3"])
     gamma = float(cfg.subsidy_rate_per_m3)
     fiscal = 15.0 * green + 0.25 * realized - gamma * realized
     agent = float(manifest["total_agent_objective_base_year"])
+    realized_subsidy = gamma * realized
+    burned_stumpage = 0.25 * realized
     return {
         "run_id": cfg.run_id,
         "gamma": gamma,
@@ -134,12 +148,14 @@ def _audit(config_path: Path) -> dict[str, float | str]:
         "realized_green_m3": green,
         "stage1_objective": float(manifest["total_principal_objective"]),
         "anticipated_subsidy": gamma * anticipated,
-        "realized_subsidy": gamma * realized,
+        "realized_subsidy": realized_subsidy,
         "subsidy_gap": gamma * (anticipated - realized),
         "fiscal_F": fiscal,
         "agent_A": agent,
         "joint_J": fiscal + agent,
-        "max_cohort_violation_m3": max_violation,
+        "burned_stumpage": burned_stumpage,
+        "max_cohort_overrun_m3": max_overrun,
+        "max_cohort_unrealized_m3": max_unrealized,
         "per_step_anticipated_m3": per_step,
     }
 
@@ -159,6 +175,18 @@ def main() -> None:
     base = frame.loc[frame["gamma"].idxmin()]
     frame["fiscal_cost_vs_zero"] = frame["fiscal_F"] - base["fiscal_F"]
     frame["joint_cost_vs_zero"] = frame["joint_J"] - base["joint_J"]
+    frame["agent_gain_vs_zero"] = frame["agent_A"] - base["agent_A"]
+    frame["fiscal_cost_per_m3"] = -frame["fiscal_cost_vs_zero"] / frame[
+        "realized_salvage_m3"
+    ].where(frame["realized_salvage_m3"] > 0.0)
+    frame["joint_cost_per_m3"] = -frame["joint_cost_vs_zero"] / frame[
+        "realized_salvage_m3"
+    ].where(frame["realized_salvage_m3"] > 0.0)
+    frame["incidence_joint_cost"] = (
+        frame["realized_subsidy"]
+        - frame["burned_stumpage"]
+        - frame["agent_gain_vs_zero"]
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.out, index=False)
     summary = args.out.with_suffix(".json")
@@ -177,7 +205,9 @@ def main() -> None:
         "joint_J",
         "fiscal_cost_vs_zero",
         "joint_cost_vs_zero",
-        "max_cohort_violation_m3",
+        "fiscal_cost_per_m3",
+        "joint_cost_per_m3",
+        "max_cohort_overrun_m3",
     ]
     print(frame[columns].to_string(index=False))
     print(f"\nwrote {args.out} and {summary}")
