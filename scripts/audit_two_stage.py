@@ -32,7 +32,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from fresh_salvage import principal
+from fresh_salvage import agent, principal
 from fresh_salvage.models import RHRunConfig
 
 
@@ -43,14 +43,18 @@ def _manifest(root: Path) -> dict:
     return json.loads(Path(matches[-1]).read_text(encoding="utf-8"))
 
 
-def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], float, float]:
-    """Return ``(S^a, per-step S^a, max overrun, max unrealized)``.
+def _anticipated(
+    root: Path, cfg: RHRunConfig
+) -> tuple[float, list[float], float, float, float]:
+    """Return ``(S^a, per-step S^a, max overrun, max unrealized, A_undisc)``.
 
     The per-cohort comparison sums offered available burned volume and realized
     salvage within each step. ``max overrun`` is positive when realized salvage
     exceeds the anticipated base (a cap failure); ``max unrealized`` is the
     largest positive anticipation gap. Under the offered-share cap the overrun
-    should be zero.
+    should be zero. ``A_undisc`` is the realized agent profit on the same
+    undiscounted base-year basis as the fiscal account; it is evaluated from
+    the decisions and the cohort margins, not from the discounted LP objective.
     """
 
     economics = cfg.economics()
@@ -60,9 +64,15 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
         green_prices=economics.green_prices,
         burned_price_discount=economics.burned_price_discount,
     )
+    agent_price_by_dt = agent._development_type_economics(
+        stands,
+        green_prices=economics.green_prices,
+        burned_price_discount=economics.burned_price_discount,
+    )
     curves = principal._yield_curves(Path(cfg.yields_path))
 
     total = 0.0
+    undiscounted = 0.0
     per_step: list[float] = []
     violations: dict[tuple[str, int], float] = {}
     for step in range(1, cfg.steps + 1):
@@ -79,6 +89,13 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
             economics=economics,
             burn_rate_multiplier=cfg.burn_rate_multiplier,
         )
+        agent_cohorts = agent._parse_are_cohorts(
+            are,
+            agent_price_by_dt,
+            curves,
+            burn_rate_multiplier=cfg.burn_rate_multiplier,
+        )
+        cohorts_by_id = {cohort.cohort_id: cohort for cohort in agent_cohorts}
         coefficients_by_id = {
             cohort.cohort_id: principal._principal_offer_coefficients(
                 cohort,
@@ -116,6 +133,29 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
             for cohort_id, value in realized.items():
                 key = (str(cohort_id), step)
                 violations[key] = violations.get(key, 0.0) - float(value)
+            gamma = float(cfg.subsidy_rate_per_m3)
+            for row in decisions.itertuples(index=False):
+                cohort = cohorts_by_id[row.cohort_id]
+                green_margin = (
+                    cohort.green_price_m3
+                    - economics.green_harvest_cost
+                    - economics.green_transport_cost_per_m3
+                    - economics.green_stumpage_rate
+                )
+                burned_prices = agent._annual_burned_prices(
+                    cohort, cfg.period_length, None
+                )
+                salvage_margin = (
+                    burned_prices[int(row.year) - 1]
+                    - economics.burned_harvest_cost
+                    - economics.burned_transport_cost_per_m3
+                    - economics.burned_stumpage_rate
+                    + gamma
+                )
+                undiscounted += (
+                    green_margin * float(row.harvest_volume_m3)
+                    + salvage_margin * float(row.salvage_volume_m3)
+                )
 
     max_overrun = max(
         (-value for value in violations.values() if value < 0.0), default=0.0
@@ -123,14 +163,20 @@ def _anticipated(root: Path, cfg: RHRunConfig) -> tuple[float, list[float], floa
     max_unrealized = max(
         (value for value in violations.values() if value > 0.0), default=0.0
     )
-    return total, per_step, max_overrun, max_unrealized
+    return total, per_step, max_overrun, max_unrealized, undiscounted
 
 
 def _audit(config_path: Path) -> dict[str, float | str]:
     cfg = RHRunConfig.model_validate(yaml.safe_load(config_path.read_text()))
     root = Path(cfg.output_root)
     manifest = _manifest(root)
-    anticipated, per_step, max_overrun, max_unrealized = _anticipated(root, cfg)
+    (
+        anticipated,
+        per_step,
+        max_overrun,
+        max_unrealized,
+        agent_undiscounted,
+    ) = _anticipated(root, cfg)
 
     realized = float(manifest["total_burned_harvest_m3"])
     green = float(manifest["total_green_harvest_m3"])
@@ -151,8 +197,10 @@ def _audit(config_path: Path) -> dict[str, float | str]:
         "realized_subsidy": realized_subsidy,
         "subsidy_gap": gamma * (anticipated - realized),
         "fiscal_F": fiscal,
-        "agent_A": agent,
-        "joint_J": fiscal + agent,
+        "agent_A_discounted": agent,
+        "agent_A_undiscounted": agent_undiscounted,
+        "joint_J_discounted": fiscal + agent,
+        "joint_J_undiscounted": fiscal + agent_undiscounted,
         "burned_stumpage": burned_stumpage,
         "max_cohort_overrun_m3": max_overrun,
         "max_cohort_unrealized_m3": max_unrealized,
@@ -174,8 +222,15 @@ def main() -> None:
     frame = pd.DataFrame(rows)
     base = frame.loc[frame["gamma"].idxmin()]
     frame["fiscal_cost_vs_zero"] = frame["fiscal_F"] - base["fiscal_F"]
-    frame["joint_cost_vs_zero"] = frame["joint_J"] - base["joint_J"]
-    frame["agent_gain_vs_zero"] = frame["agent_A"] - base["agent_A"]
+    frame["joint_cost_vs_zero"] = (
+        frame["joint_J_undiscounted"] - base["joint_J_undiscounted"]
+    )
+    frame["agent_gain_vs_zero"] = (
+        frame["agent_A_undiscounted"] - base["agent_A_undiscounted"]
+    )
+    frame["agent_gain_discounted_vs_zero"] = (
+        frame["agent_A_discounted"] - base["agent_A_discounted"]
+    )
     frame["fiscal_cost_per_m3"] = -frame["fiscal_cost_vs_zero"] / frame[
         "realized_salvage_m3"
     ].where(frame["realized_salvage_m3"] > 0.0)
@@ -201,8 +256,9 @@ def main() -> None:
         "acceptance_pct",
         "stage1_objective",
         "fiscal_F",
-        "agent_A",
-        "joint_J",
+        "agent_A_undiscounted",
+        "joint_J_undiscounted",
+        "agent_gain_vs_zero",
         "fiscal_cost_vs_zero",
         "joint_cost_vs_zero",
         "fiscal_cost_per_m3",
