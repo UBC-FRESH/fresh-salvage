@@ -171,6 +171,8 @@ def _reduced_principal_lp():
         period_length=PERIOD_LENGTH,
         grade_clock_period=PERIOD_LENGTH,
         burned_stock_reset=True,
+        # The branch-base LP predates the B[y-1]+I[y] stage-1 basis.
+        include_influx=False,
     )
 
 
@@ -180,6 +182,8 @@ def _static_principal_lp():
         horizon=HORIZON,
         aac_annual_m3=5_000.0,
         cohort_ceilings_m3=[400.0, 0.0],
+        # Pair with ``_reduced_principal_lp`` on the branch-base basis.
+        include_influx=False,
     )
 
 
@@ -308,6 +312,7 @@ def test_principal_defaults_match_branch_base_at_any_horizon() -> None:
             _principal_cohorts(growth=False, subsidy=0.0),
             horizon=horizon,
             aac_annual_m3=5_000.0,
+            include_influx=False,
         )
         assert _lp_arrays(current_lp) == _lp_arrays(base_lp)
 
@@ -343,6 +348,7 @@ def test_principal_solution_matches_branch_base() -> None:
         period_length=PERIOD_LENGTH,
         grade_clock_period=PERIOD_LENGTH,
         burned_stock_reset=True,
+        include_influx=False,
         run_id="equivalence",
     )
 

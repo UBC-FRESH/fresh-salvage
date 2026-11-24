@@ -304,6 +304,7 @@ def build_principal_lp(
     period_length: int | None = None,
     grade_clock_period: int | None = None,
     burned_stock_reset: bool = False,
+    include_influx: bool = True,
 ) -> PrincipalLP:
     """Build the continuous principal offer LP as a HiGHS model.
 
@@ -327,6 +328,11 @@ def build_principal_lp(
     prices the annual grade mix at ``year % period`` (D5; ``None`` keeps the
     LP-year index, the rolling-horizon default). ``burned_stock_reset``
     re-seeds the predetermined burned path at every decade boundary (D6).
+    ``include_influx`` (default true) values the burned offer coefficient on
+    the volume available for salvage in the offer year, ``B_{y-1} + I_y``,
+    instead of the start-of-year inventory. Pass false only to reproduce the
+    pre-fix coefficient basis in equivalence tests.
+
     With the defaults, or with a horizon of at most one decade, the LP is
     bit-identical to the rolling-horizon LP (equivalence tests).
     """
@@ -407,7 +413,7 @@ def build_principal_lp(
             period_length=period_length,
             grade_clock_period=grade_clock_period,
             burned_stock_reset=burned_stock_reset,
-            include_influx=True,
+            include_influx=include_influx,
         )
         costs[base : base + horizon] = coefficients.annual_offer
         for year, loss in enumerate(coefficients.annual_burn_loss):
@@ -493,6 +499,7 @@ def solve_principal(
     period_length: int | None = None,
     grade_clock_period: int | None = None,
     burned_stock_reset: bool = False,
+    include_influx: bool = True,
     run_id: str = "principal-solve",
 ) -> PrincipalResult:
     """Build and solve the principal LP; return the typed result.
@@ -514,6 +521,7 @@ def solve_principal(
         period_length=period_length,
         grade_clock_period=grade_clock_period,
         burned_stock_reset=burned_stock_reset,
+        include_influx=include_influx,
     )
     solve_started = time.monotonic()
     built.model.run()
