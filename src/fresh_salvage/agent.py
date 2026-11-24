@@ -356,8 +356,10 @@ def build_agent_lp(
 
     Column layout is deterministic (cohort-major, then year): all ``H``
     columns, then all ``S``, ``V``, ``B`` columns, each block of size
-    ``len(cohorts) * horizon``. ``H[c,t]``/``S[c,t]`` carry the offered
-    fractions as upper bounds; ``V``/``B`` are bounded to ``[0, 1]``.
+    ``len(cohorts) * horizon``. ``H[c,t]`` carries the offered fraction as an
+    upper bound; ``S[c,t]`` is bounded by the offered share of the available
+    burned volume (``o * (B + BURN_IN)``) and by the same raw offer upper
+    bound; ``V``/``B`` are bounded to ``[0, 1]``.
     ``economics`` carries the price/cost/rate surface of the margin
     coefficients (defaults to the calibrated ``data.py`` constants).
 

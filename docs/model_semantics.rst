@@ -154,9 +154,12 @@ standalone simulation):
 
 ``B[c, t]``
    Burned-inventory fraction at end of year ``t`` — the salvageable pool.
-   Initial condition ``B[c, 0] = 0`` inside the LPs; the year-0 burned stock
-   of the 2025 severity-rated stands enters through the cohort state
-   assembled at the rolling-horizon boundary.
+   With ``seed_initial_burned`` off, ``B[c, 0] = 0`` inside the LP and the
+   year-0 stock of the 2025 severity-rated stands is not salvageable. With
+   the flag on, ``B[c, 0]`` is the same development-type ``burn_share`` of
+   standing volume that the principal seeds its burned path with, so both
+   LPs start from the same stock; under ``burned_stock_reset`` the seed is
+   re-applied at every decade boundary.
 
 ``H[c, t]``
    Fraction of the cohort's initial standing volume harvested green in year
@@ -164,7 +167,9 @@ standalone simulation):
 
 ``S[c, t]``
    Fraction salvaged from the burned inventory in year ``t`` (decision
-   variable of the agent; bounded by the offer and by salvage feasibility).
+   variable of the agent; equal to the offered share of the available
+   ``B[c,t-1] + BURN_IN[c,t]``, so the realized salvage never exceeds the
+   principal's anticipated salvage base).
 
 ``R``
    Annual burn probability ``1 / MFRI[bec_zone]``, optionally scaled by
@@ -229,8 +234,11 @@ where, per cohort (all volumes m3, parsed at the boundary):
 
 ``annual_offer[c,y]``
    The direct principal offer coefficient for cohort ``c`` in year ``y``.
-   It is precomputed from expected live volume, burned volume, stumpage, and
-   subsidy rates; the subsidy is a cost to the principal.
+   It is precomputed from expected live volume, the burned volume available
+   for salvage in the offer year (``B[c,y-1] + I[c,y]``), stumpage, and
+   subsidy rates; the subsidy is a cost to the principal. Using the available
+   burned volume makes the stage-1 subsidy budget an upper bound on the
+   agent's realized salvage, which is capped by the same offered share.
 
 ``annual_burned_value[c,y]``
    The expected burned volume available at offer year ``y`` priced at the
@@ -287,8 +295,9 @@ dynamics above:
                        - burned_transport_cost - burned_stumpage_rate
                        + subsidy_rate_per_m3
 
-   H[c,t], S[c,t] <= offer[c,t]                     (principal coupling)
-   S[c,t] <= B[c,t-1] + R * (V[c,t-1] - H[c,t])     (salvage feasibility)
+   H[c,t] <= offer[c,t]                             (green coupling)
+   S[c,t] <= offer[c,t]
+             * (B[c,t-1] + R * (V[c,t-1] - H[c,t])) (salvage coupling)
    sum_t H[c,t] + sum_t S[c,t] <= 1                 (no double selling)
 
 ``H``/``S``/``V``/``B`` are fractions of the cohort's initial standing

@@ -63,9 +63,12 @@ Constraints (every volume row is in m3/yr)::
     burned_cap_y:   sum_c burned_volume_m3[c] * offer[c,y]
                     <= burned_limit_annual_m3           (only when configured)
 
-Because one fraction variable scales both volumes, an offer's green:burned
-split always equals the cohort's standing fractions, and offer-once is exactly
-volume conservation: cumulative offered volume never exceeds standing volume.
+One fraction variable scales the cohort's green volume and its available
+burned volume (``B[y-1] + I[y]``). The green side uses the standing volume;
+the burned side uses the volume the agent can actually salvage in the offer
+year, so the stage-1 subsidy budget and the agent's offered salvage share use
+the same basis. Offer-once is volume conservation: cumulative offered volume
+never exceeds standing volume.
 
 Documented deviations from the prototype
 ----------------------------------------
