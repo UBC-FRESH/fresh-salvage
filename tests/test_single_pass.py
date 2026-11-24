@@ -649,6 +649,9 @@ def test_regenerated_lp_cohorts_use_scheduled_area_and_volume() -> None:
     assert cohort_a.burn_rate == 0.0
     assert cohort_a.green_price_m3 == 120.0
     assert cohort_a.decadal_volume_scale == (100.0, 100.0)
+    # Regenerated cohorts have no 2025 severity stock; a zero seed is derived,
+    # not missing, so ``seed_initial_burned`` can run in single-pass mode.
+    assert cohort_a.initial_burned_fraction == 0.0
 
 
 def test_regenerated_cohort_is_inactive_outside_its_scheduled_period() -> None:

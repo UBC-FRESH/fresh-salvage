@@ -1038,6 +1038,9 @@ def _regenerated_agent_cohorts(
                 burned_grade_mix=None,
                 burned_grade_prices=None,
                 decadal_volume_scale=scale,
+                # A regenerated cohort is created inside the horizon; it has
+                # no 2025 severity stock, so its seed is legitimately zero.
+                initial_burned_fraction=0.0,
             )
         )
     return cohorts
