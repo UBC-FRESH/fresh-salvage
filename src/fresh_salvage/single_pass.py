@@ -741,6 +741,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
 
     step_records = _decade_records(
         config,
+        economics=economics,
         principal_result=principal_result,
         agent_result=agent_result,
         replay=replay,
@@ -823,6 +824,7 @@ def run_single_pass(config: RHRunConfig, verbose: bool = False) -> RHResult:
 def _decade_records(
     config: RHRunConfig,
     *,
+    economics: Economics | None = None,
     principal_result: PrincipalResult,
     agent_result: AgentResult,
     replay: LineageReplay,
@@ -842,6 +844,8 @@ def _decade_records(
     """
 
     period_length = config.period_length
+    if economics is None:
+        economics = config.economics()
     discount_factor = 1.0 + config.discount_rate
     if len(principal_result.decadal_objective_values) != config.steps:
         raise SinglePassError(
@@ -865,6 +869,12 @@ def _decade_records(
             year_start : year_start + period_length
         ]
         agent_decade_value = agent_result.decadal_objective_values[decade]
+        subsidy_expense = economics.subsidy_rate_per_m3 * sum(
+            volumes.salvage_volume_m3 for volumes in annual_volumes
+        )
+        principal_decade_value = (
+            principal_result.decadal_objective_values[decade] - subsidy_expense
+        )
         records.append(
             RHStepRecord(
                 step=decade + 1,
@@ -873,12 +883,8 @@ def _decade_records(
                 ws3_objective_value=ws3_objective if decade == 0 else None,
                 ws3_build_seconds=ws3_build_seconds if decade == 0 else 0.0,
                 ws3_solve_seconds=ws3_solve_seconds if decade == 0 else 0.0,
-                principal_objective_value=principal_result.decadal_objective_values[
-                    decade
-                ],
-                principal_objective_value_base_year=(
-                    principal_result.decadal_objective_values[decade]
-                ),
+                principal_objective_value=principal_decade_value,
+                principal_objective_value_base_year=principal_decade_value,
                 principal_solve_seconds=(
                     principal_result.solve_seconds if decade == 0 else 0.0
                 ),

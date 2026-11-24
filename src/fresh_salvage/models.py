@@ -1026,8 +1026,9 @@ class RHRunConfig(BaseModel):
     agent NPV divisor; both default to the standalone principal/agent values.
 
     ``subsidy_rate_per_m3`` is the salvage subsidy ($/m3 of burned volume
-    salvaged) charged in the principal cashflow and paid in the agent salvage
-    margin; it defaults to the shared ``data.SUBSIDY_RATE_PER_M3`` constant.
+    salvaged), paid in the agent salvage margin and charged to the principal
+    ex post on realized salvage (not on the offer fraction); it defaults to the
+    shared ``data.SUBSIDY_RATE_PER_M3`` constant.
     ``burn_rate_multiplier`` scales every MFRI-derived annual burn rate
     (1.0 = the MFRI table as published; 0.0 = a fire-free counterfactual);
     it is the ensemble axis for future-fire-pattern assumptions.

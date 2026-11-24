@@ -1093,15 +1093,17 @@ def test_decade_records_slice_annual_arrays_and_rebase_objectives(tmp_path: Path
     assert records[1].ws3_objective_value is None
     assert records[1].ws3_solve_seconds == 0.0
     # D7: decade-start basis in *_objective_value, base-year basis next to it.
-    assert [record.principal_objective_value for record in records] == [-100.0, -60.0]
+    # Principal values are net of the ex-post subsidy: 3.0 $/m3 x summed salvage
+    # (4.5 m3 in decade 1, 14.5 m3 in decade 2).
+    assert [record.principal_objective_value for record in records] == [-113.5, -103.5]
     assert [record.agent_objective_value for record in records] == [200.0, 100.0]
     assert records[0].agent_objective_value_base_year == 200.0
     assert records[1].agent_objective_value_base_year == pytest.approx(
         100.0 * 1.03**-10
     )
     assert [record.principal_objective_value_base_year for record in records] == [
-        -100.0,
-        -60.0,
+        -113.5,
+        -103.5,
     ]
     # Every record round-trips through its JSONL serialization.
     assert [

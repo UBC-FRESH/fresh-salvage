@@ -774,6 +774,9 @@ def _run_step(
             f"[{getattr(exc, 'code', type(exc).__name__)}] {exc}",
         ) from exc
 
+    subsidy_expense = economics.subsidy_rate_per_m3 * sum(
+        volumes.salvage_volume_m3 for volumes in agent_result.per_year_volumes
+    )
     record = RHStepRecord(
         step=step,
         start_year=start_year,
@@ -781,7 +784,7 @@ def _run_step(
         ws3_objective_value=ws3_objective,
         ws3_build_seconds=ws3_build_seconds,
         ws3_solve_seconds=ws3_solve_seconds,
-        principal_objective_value=principal_result.objective_value,
+        principal_objective_value=principal_result.objective_value - subsidy_expense,
         principal_solve_seconds=principal_result.solve_seconds,
         agent_objective_value=agent_result.objective_value,
         agent_solve_seconds=agent_result.solve_seconds,

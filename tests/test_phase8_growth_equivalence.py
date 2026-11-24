@@ -76,7 +76,9 @@ def _lp_arrays(built) -> dict[str, list[float]]:
     }
 
 
-def _principal_cohorts(*, growth: bool) -> list[principal.PrincipalCohort]:
+def _principal_cohorts(
+    *, growth: bool, subsidy: float = 3.0
+) -> list[principal.PrincipalCohort]:
     """Two cohorts on the calibrated economic surface (toy volumes)."""
 
     cohorts = [
@@ -94,7 +96,7 @@ def _principal_cohorts(*, growth: bool) -> list[principal.PrincipalCohort]:
             burned_grade_prices=(100.0, 80.0, 40.0, 20.0),
             green_stumpage_rate=4.0,
             burned_stumpage_rate=0.25,
-            subsidy_rate_per_m3=3.0,
+            subsidy_rate_per_m3=subsidy,
         ),
         principal.PrincipalCohort(
             cohort_id="b",
@@ -108,7 +110,7 @@ def _principal_cohorts(*, growth: bool) -> list[principal.PrincipalCohort]:
             burn_rate=0.005,
             green_stumpage_rate=4.0,
             burned_stumpage_rate=0.25,
-            subsidy_rate_per_m3=3.0,
+            subsidy_rate_per_m3=subsidy,
         ),
     ]
     if not growth:
@@ -298,10 +300,14 @@ def test_principal_defaults_match_branch_base_at_any_horizon() -> None:
 
     for horizon in (HORIZON, 15):
         base_lp = base.build_principal_lp(
-            _principal_cohorts(growth=False), horizon=horizon, aac_annual_m3=5_000.0
+            _principal_cohorts(growth=False, subsidy=0.0),
+            horizon=horizon,
+            aac_annual_m3=5_000.0,
         )
         current_lp = principal.build_principal_lp(
-            _principal_cohorts(growth=False), horizon=horizon, aac_annual_m3=5_000.0
+            _principal_cohorts(growth=False, subsidy=0.0),
+            horizon=horizon,
+            aac_annual_m3=5_000.0,
         )
         assert _lp_arrays(current_lp) == _lp_arrays(base_lp)
 
@@ -310,7 +316,7 @@ def test_principal_horizon_within_one_decade_matches_branch_base() -> None:
     base = _base_module("src/fresh_salvage/principal.py")
 
     base_lp = base.build_principal_lp(
-        _principal_cohorts(growth=False),
+        _principal_cohorts(growth=False, subsidy=0.0),
         horizon=HORIZON,
         aac_annual_m3=5_000.0,
         cohort_ceilings_m3=[400.0, 0.0],
@@ -323,14 +329,14 @@ def test_principal_solution_matches_branch_base() -> None:
     base = _base_module("src/fresh_salvage/principal.py")
 
     base_result = base.solve_principal(
-        _principal_cohorts(growth=False),
+        _principal_cohorts(growth=False, subsidy=0.0),
         horizon=HORIZON,
         aac_annual_m3=5_000.0,
         cohort_ceilings_m3=[400.0, 0.0],
         run_id="equivalence",
     )
     current_result = principal.solve_principal(
-        _principal_cohorts(growth=True),
+        _principal_cohorts(growth=True, subsidy=0.0),
         horizon=HORIZON,
         aac_annual_m3=5_000.0,
         cohort_ceilings_m3=[400.0, 0.0],
