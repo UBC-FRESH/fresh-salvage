@@ -187,6 +187,7 @@ def _audit(config_path: Path) -> dict[str, float | str]:
     burned_stumpage = 0.25 * realized
     return {
         "run_id": cfg.run_id,
+        "discount": float(cfg.burned_price_discount),
         "gamma": gamma,
         "anticipated_salvage_m3": anticipated,
         "realized_salvage_m3": realized,
