@@ -977,6 +977,30 @@ def test_offer_fraction_scales_the_salvageable_burned_stock() -> None:
     )
 
 
+def test_each_cohort_uses_its_own_offer_fraction() -> None:
+    first = _seed_cohort("first", fraction=0.2)
+    second = _seed_cohort("second", fraction=0.2)
+
+    result = _solve(
+        [first, second],
+        horizon=1,
+        offers=[(1.0,), (0.5,)],
+        seed_initial_burned=True,
+    )
+
+    salvage = {
+        cohort_id: sum(
+            decision.salvage_volume_m3
+            for decision in result.decisions
+            if decision.cohort_id == cohort_id
+        )
+        for cohort_id in ("first", "second")
+    }
+    # 0.2 * 100 = 20 m3 in each stock; the offers authorize 100% and 50%.
+    assert salvage["first"] == pytest.approx(20.0)
+    assert salvage["second"] == pytest.approx(10.0)
+
+
 def test_seed_reapplies_at_each_decade_under_burned_stock_reset() -> None:
     cohort = _seed_cohort("reset-seed")
 

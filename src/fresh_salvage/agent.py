@@ -497,7 +497,7 @@ def build_agent_lp(
             salvage_col = salvage_offset + base + year
             live_col = live_offset + base + year
             burned_col = burned_offset + base + year
-            offer_fraction = float(offered[year])
+            offer_fraction = float(offers[c_index][year])
             if year == 0:
                 # Initial conditions V[c,0] = 1 and B[c,0] = seed fold into
                 # the right-hand sides via the fire.py dynamics primitives.
