@@ -40,7 +40,7 @@ parses, at the boundary:
   Phase 2a stands of the cohort's development type (stratum
   ``{bec}_{species}`` -> ``{species_group}_{BEC}``);
 - ``annual_offer[c,y]`` (the direct offer coefficient) and
-   ``annual_burn_loss[c,y]`` (the unoffered burned-value loss coefficient),
+   ``annual_burn_loss[c,y]`` (the incremental unoffered burned-value loss coefficient),
    precomputed for every offer year from the configured economics, expected
    fire influx, burned-volume decay, and annual grade mix. The mix is
    predetermined and independent of offer decisions;
@@ -112,9 +112,9 @@ decision variables:
   priced at index ``year mod period``, which mirrors the rolling-horizon
   window indexing.
 - ``burned_stock_reset`` re-seeds the predetermined burned path from
-  ``burned_volume_m3 * v_k / v_0`` at each decade boundary and restarts the
-  ``annual_burn_loss`` decay exponent at ``year % L`` (D6), mimicking the
-  rolling-horizon boundary reset (``rh.py`` "Burned-stock boundary").
+  ``burned_volume_m3 * v_k / v_0`` at each decade boundary, mimicking the
+  rolling-horizon boundary reset (``rh.py`` "Burned-stock boundary"). The
+  annual loss is then 15% of the re-seeded available value.
 
 With the defaults, or with a horizon of at most one decade, all three
 reduce bit-exactly to the rolling-horizon coefficients (equivalence tests).
@@ -287,9 +287,7 @@ def decadal_per_ha_volumes(
     decade_count = math.ceil(horizon / period_length)
     return [
         tuple(
-            _curve_volume_m3_per_ha(
-                curves, int(curve_id), int(age0) + period_length * decade
-            )
+            _curve_volume_m3_per_ha(curves, int(curve_id), int(age0) + period_length * decade)
             for decade in range(decade_count)
         )
         for curve_id, age0 in cohort_curve_ages
@@ -384,9 +382,7 @@ def build_principal_lp(
     years = range(horizon)
     offer_count = cohort_count * horizon
     total_columns = 2 * offer_count
-    year_volumes = [
-        _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
-    ]
+    year_volumes = [_cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts]
     green_by_year = np.array([green for green, _burned in year_volumes])
     # The optional burned cap keeps its historical basis: the static/decadal
     # burned volume, not the year's available B_{y-1} + I_y. The stage-1
@@ -443,14 +439,10 @@ def build_principal_lp(
     for c_index in range(cohort_count):
         base = c_index * horizon
         indices = np.arange(base, base + horizon, dtype=np.int32)
-        model.addRow(
-            -highspy.kHighsInf, 1.0, horizon, indices, np.ones(horizon)
-        )
+        model.addRow(-highspy.kHighsInf, 1.0, horizon, indices, np.ones(horizon))
 
     # aac[y]: sum_c green_volume_m3[c,y] * offer[c,y] <= aac_annual_m3
-    offer_columns = tuple(
-        (c_index, year) for c_index in range(cohort_count) for year in years
-    )
+    offer_columns = tuple((c_index, year) for c_index in range(cohort_count) for year in years)
     column_grid = np.arange(offer_count, dtype=np.int32).reshape(cohort_count, horizon)
     for year in years:
         model.addRow(
@@ -540,9 +532,7 @@ def solve_principal(
     solution = built.model.getSolution().col_value
     objective_value = float(built.model.getInfo().objective_function_value)
 
-    year_volumes = [
-        _cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts
-    ]
+    year_volumes = [_cohort_year_volumes(cohort, horizon, period_length) for cohort in cohorts]
     burned_by_year = [
         _cohort_year_available_burned(
             cohort,
@@ -635,9 +625,7 @@ def decadal_objective_values(
         decade = year // period_length
         decades[decade] += float(costs[column]) * float(solution[column])
         cumulative_column = offer_column_count + column
-        decades[decade] += (
-            float(costs[cumulative_column]) * float(solution[cumulative_column])
-        )
+        decades[decade] += float(costs[cumulative_column]) * float(solution[cumulative_column])
     return decades
 
 
@@ -765,9 +753,11 @@ def _expected_burn_losses(
 ) -> list[tuple[int, float]]:
     """Return ``(year_index, expected_loss)`` pairs for one cohort.
 
-    The expected loss charged when the cohort is still unoffered in year
-    ``y`` (1-based) uses the predetermined fire/decay trajectory and annual
-    burned-grade value.
+    The incremental expected loss charged when the cohort is still unoffered
+    in year ``y`` (1-based) uses the predetermined fire/decay trajectory and
+    annual burned-grade value. The objective sums this annual loss over the
+    years the cohort remains unoffered, so a cohort offered in year ``y`` is
+    charged the cumulative decay loss through year ``y`` exactly once.
     """
 
     if cohort.burn_rate == 0.0 or cohort.burned_value == 0.0:
@@ -809,8 +799,8 @@ def _principal_offer_coefficients(
     volume, so burn influx in decade ``k`` is ``R * live_area * v_k``.
     ``grade_clock_period`` prices the annual grade
     mix at ``year % period`` (D5); ``burned_stock_reset`` re-seeds the burned
-    inventory from ``burned_volume_m3 * v_k / v_0`` and restarts the
-    ``annual_burn_loss`` decay exponent at every decade boundary (D6).
+    inventory from ``burned_volume_m3 * v_k / v_0`` at every decade boundary
+    (D6). The annual loss is 15% of the re-seeded available value.
     """
 
     if horizon <= 0:
@@ -832,10 +822,7 @@ def _principal_offer_coefficients(
             "burned_stock_reset requires period_length",
         )
 
-    green_by_year, static_burned_by_year = _cohort_year_volumes(
-        cohort, horizon, period_length
-    )
-    exponents = _decay_exponents(horizon, period_length, burned_stock_reset)
+    green_by_year, static_burned_by_year = _cohort_year_volumes(cohort, horizon, period_length)
 
     configured_economics = (
         cohort.green_stumpage_rate,
@@ -863,10 +850,7 @@ def _principal_offer_coefficients(
             burned_volumes=available_burned,
             grade_clock_period=grade_clock_period,
         )
-        losses = tuple(
-            cohort.burn_rate * value * (1.0 - decay_rate**exponent)
-            for value, exponent in zip(burned_values, exponents, strict=True)
-        )
+        losses = tuple(cohort.burn_rate * value * (1.0 - decay_rate) for value in burned_values)
         return PrincipalOfferCoefficients(
             annual_burned_volume_m3=available_burned,
             annual_burned_price_m3=tuple(
@@ -907,8 +891,7 @@ def _principal_offer_coefficients(
         )
     )
     annual_burn_loss = tuple(
-        cohort.burn_rate * value * (1.0 - decay_rate**exponent)
-        for value, exponent in zip(annual_burned_values, exponents, strict=True)
+        cohort.burn_rate * value * (1.0 - decay_rate) for value in annual_burned_values
     )
     return PrincipalOfferCoefficients(
         annual_burned_volume_m3=tuple(annual_burned_volume),
@@ -931,9 +914,7 @@ def _decadal_scale_array(
             f"cohort {cohort.cohort_id!r} carries a decadal volume scale but "
             "period_length is not set",
         )
-    return _parse_decadal_volume_scale(
-        cohort.decadal_volume_scale, horizon, period_length
-    )
+    return _parse_decadal_volume_scale(cohort.decadal_volume_scale, horizon, period_length)
 
 
 def _parse_decadal_volume_scale(
@@ -1036,26 +1017,6 @@ def _relative_green_volumes(
     return tuple(float(volume) / cohort.green_volume_m3 for volume in green_by_year)
 
 
-def _decay_exponents(
-    horizon: int, period_length: int | None, burned_stock_reset: bool
-) -> tuple[int, ...]:
-    """Return the ``annual_burn_loss`` decay exponent of every offer year.
-
-    Both planning modes index the exponent by the LP year;
-    ``burned_stock_reset`` restarts it at every decade boundary (D6), which
-    only changes a multi-decade LP.
-    """
-
-    if not burned_stock_reset:
-        return tuple(range(horizon))
-    if period_length is None:
-        raise PrincipalError(
-            "principal_invalid_burned_stock_reset",
-            "burned_stock_reset requires period_length",
-        )
-    return tuple(year % period_length for year in range(horizon))
-
-
 def _annual_burned_volumes(
     cohort: PrincipalCohort,
     horizon: int,
@@ -1118,11 +1079,7 @@ def _annual_burned_volumes(
         # reduction to the static path bit-exact); a zero t=0 volume cohort
         # scales its area-based influx by ``v_0 = 0`` in decade 0 as well.
         if v0 > 0.0:
-            influx = (
-                influx_basis
-                if decade == 0
-                else influx_basis * float(per_ha[decade]) / v0
-            )
+            influx = influx_basis if decade == 0 else influx_basis * float(per_ha[decade]) / v0
         else:
             influx = influx_basis * float(per_ha[decade])
         volumes.append(burned + influx if include_influx else burned)
@@ -1146,11 +1103,7 @@ def _reseeded_burned_volume(
         return float(cohort.burned_volume_m3)
     if per_ha[0] <= 0.0:
         return 0.0
-    return (
-        float(cohort.burned_volume_m3)
-        * float(per_ha[year // period_length])
-        / float(per_ha[0])
-    )
+    return float(cohort.burned_volume_m3) * float(per_ha[year // period_length]) / float(per_ha[0])
 
 
 def _annual_burned_values(
@@ -1175,18 +1128,14 @@ def _annual_burned_values(
     initial_mix = dict(zip(GRADE_ORDER, cohort.burned_grade_mix, strict=True))
     prices = dict(zip(GRADE_ORDER, cohort.burned_grade_prices, strict=True))
     indices = _grade_clock_indices(horizon, grade_clock_period)
-    mixes = annual_grade_mix(
-        initial_mix, _grade_mix_table_length(horizon, grade_clock_period)
-    )
+    mixes = annual_grade_mix(initial_mix, _grade_mix_table_length(horizon, grade_clock_period))
     return [
         volume * weighted_grade_price(mixes[index], prices)
         for volume, index in zip(burned_volumes, indices, strict=True)
     ]
 
 
-def _grade_clock_indices(
-    horizon: int, grade_clock_period: int | None
-) -> tuple[int, ...]:
+def _grade_clock_indices(horizon: int, grade_clock_period: int | None) -> tuple[int, ...]:
     """Return the grade-mix index of every LP year."""
 
     if grade_clock_period is None:
@@ -1219,8 +1168,7 @@ def _read_table(path: Path, code: str) -> pd.DataFrame:
         return pd.read_csv(path)
     raise PrincipalError(
         "principal_table_unsupported_suffix",
-        f"input table {path} has unsupported suffix {path.suffix!r}; "
-        "expected .parquet or .csv",
+        f"input table {path} has unsupported suffix {path.suffix!r}; expected .parquet or .csv",
     )
 
 
@@ -1244,9 +1192,7 @@ def _development_type_economics(
         green_prices = GREEN_PRICES
     if burned_price_discount is None:
         burned_price_discount = BURNED_PRICE_DISCOUNT
-    burned_prices = {
-        key: value * burned_price_discount for key, value in green_prices.items()
-    }
+    burned_prices = {key: value * burned_price_discount for key, value in green_prices.items()}
 
     required = {
         "development_type",
@@ -1279,21 +1225,21 @@ def _development_type_economics(
                 grade = "Other"
             else:
                 suffix = price_key.rsplit("_", 1)[1]
-                grade = {suffix_name: grade_name for grade_name, suffix_name in {
-                    "Peeler": "Peelers",
-                    "Sawlog": "Sawlog",
-                    "Pulpwood": "Pulpwood",
-                }.items()}[suffix]
+                grade = {
+                    suffix_name: grade_name
+                    for grade_name, suffix_name in {
+                        "Peeler": "Peelers",
+                        "Sawlog": "Sawlog",
+                        "Pulpwood": "Pulpwood",
+                    }.items()
+                }[suffix]
             grade_volumes[grade] += volume
             grade_values[grade] += volume * price
         grade_mix = tuple(
-            grade_volumes[grade] / burned if burned > 0.0 else 0.0
-            for grade in GRADE_ORDER
+            grade_volumes[grade] / burned if burned > 0.0 else 0.0 for grade in GRADE_ORDER
         )
         grade_prices = tuple(
-            grade_values[grade] / grade_volumes[grade]
-            if grade_volumes[grade] > 0.0
-            else 0.0
+            grade_values[grade] / grade_volumes[grade] if grade_volumes[grade] > 0.0 else 0.0
             for grade in GRADE_ORDER
         )
         economics[str(development_type)] = {
@@ -1377,14 +1323,10 @@ def _parse_are_cohorts(
     if economics is None:
         economics = Economics()
     if not are_path.is_file():
-        raise PrincipalError(
-            "principal_are_missing", f"ARE section not found: {are_path}"
-        )
+        raise PrincipalError("principal_are_missing", f"ARE section not found: {are_path}")
 
     cohorts: list[PrincipalCohort] = []
-    for line_number, line in enumerate(
-        are_path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    for line_number, line in enumerate(are_path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip().startswith("*A"):
             continue
         tokens = line.split()
@@ -1457,9 +1399,7 @@ def _parse_are_cohorts(
             )
         )
     if not cohorts:
-        raise PrincipalError(
-            "principal_are_empty", f"ARE section {are_path} contains no data rows"
-        )
+        raise PrincipalError("principal_are_empty", f"ARE section {are_path} contains no data rows")
     return cohorts
 
 

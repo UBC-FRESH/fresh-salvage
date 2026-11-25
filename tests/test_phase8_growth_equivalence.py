@@ -11,6 +11,11 @@ history (``fetch-depth: 0`` in ``.github/workflows/ci.yml``), so the
 cross-module comparisons run there too; a locally shallow clone skips them
 with a clear message and still runs the in-module reduction tests (defaults
 versus reducing arguments), which always run.
+
+The principal cross-module baseline was retired when the expected-loss
+coefficient changed from a cumulative charge to an incremental annual charge.
+The principal reduction tests remain in this module; the agent baseline is
+unchanged.
 """
 
 from __future__ import annotations
@@ -76,9 +81,7 @@ def _lp_arrays(built) -> dict[str, list[float]]:
     }
 
 
-def _principal_cohorts(
-    *, growth: bool, subsidy: float = 3.0
-) -> list[principal.PrincipalCohort]:
+def _principal_cohorts(*, growth: bool, subsidy: float = 3.0) -> list[principal.PrincipalCohort]:
     """Two cohorts on the calibrated economic surface (toy volumes)."""
 
     cohorts = [
@@ -118,9 +121,7 @@ def _principal_cohorts(
     # green_volume_m3 / area_ha is exact for these toy volumes, so
     # area_ha * v_0 reproduces the parsed t=0 volume bit-exactly.
     return [
-        dataclasses.replace(
-            cohort, decadal_volume_scale=(cohort.green_volume_m3 / cohort.area_ha,)
-        )
+        dataclasses.replace(cohort, decadal_volume_scale=(cohort.green_volume_m3 / cohort.area_ha,))
         for cohort in cohorts
     ]
 
@@ -299,68 +300,6 @@ def test_agent_horizon_shorter_than_one_decade_reduces_bit_exactly() -> None:
     assert _lp_arrays(reduced) == _lp_arrays(static)
 
 
-def test_principal_defaults_match_branch_base_at_any_horizon() -> None:
-    base = _base_module("src/fresh_salvage/principal.py")
-
-    for horizon in (HORIZON, 15):
-        base_lp = base.build_principal_lp(
-            _principal_cohorts(growth=False, subsidy=0.0),
-            horizon=horizon,
-            aac_annual_m3=5_000.0,
-        )
-        current_lp = principal.build_principal_lp(
-            _principal_cohorts(growth=False, subsidy=0.0),
-            horizon=horizon,
-            aac_annual_m3=5_000.0,
-            include_influx=False,
-        )
-        assert _lp_arrays(current_lp) == _lp_arrays(base_lp)
-
-
-def test_principal_horizon_within_one_decade_matches_branch_base() -> None:
-    base = _base_module("src/fresh_salvage/principal.py")
-
-    base_lp = base.build_principal_lp(
-        _principal_cohorts(growth=False, subsidy=0.0),
-        horizon=HORIZON,
-        aac_annual_m3=5_000.0,
-        cohort_ceilings_m3=[400.0, 0.0],
-    )
-
-    assert _lp_arrays(_reduced_principal_lp()) == _lp_arrays(base_lp)
-
-
-def test_principal_solution_matches_branch_base() -> None:
-    base = _base_module("src/fresh_salvage/principal.py")
-
-    base_result = base.solve_principal(
-        _principal_cohorts(growth=False, subsidy=0.0),
-        horizon=HORIZON,
-        aac_annual_m3=5_000.0,
-        cohort_ceilings_m3=[400.0, 0.0],
-        run_id="equivalence",
-    )
-    current_result = principal.solve_principal(
-        _principal_cohorts(growth=True, subsidy=0.0),
-        horizon=HORIZON,
-        aac_annual_m3=5_000.0,
-        cohort_ceilings_m3=[400.0, 0.0],
-        period_length=PERIOD_LENGTH,
-        grade_clock_period=PERIOD_LENGTH,
-        burned_stock_reset=True,
-        include_influx=False,
-        run_id="equivalence",
-    )
-
-    assert current_result.objective_value == pytest.approx(base_result.objective_value)
-    assert [
-        (offer.cohort_id, offer.year) for offer in current_result.offers
-    ] == [(offer.cohort_id, offer.year) for offer in base_result.offers]
-    assert [offer.offer_fraction for offer in current_result.offers] == pytest.approx(
-        [offer.offer_fraction for offer in base_result.offers]
-    )
-
-
 def test_agent_defaults_match_branch_base_at_any_horizon() -> None:
     base = _base_module("src/fresh_salvage/agent.py")
 
@@ -415,9 +354,9 @@ def test_agent_solution_matches_branch_base() -> None:
     )
 
     assert current_result.objective_value == pytest.approx(base_result.objective_value)
-    assert [
-        (decision.cohort_id, decision.year) for decision in current_result.decisions
-    ] == [(decision.cohort_id, decision.year) for decision in base_result.decisions]
+    assert [(decision.cohort_id, decision.year) for decision in current_result.decisions] == [
+        (decision.cohort_id, decision.year) for decision in base_result.decisions
+    ]
     assert [
         (decision.harvest_fraction, decision.salvage_fraction)
         for decision in current_result.decisions

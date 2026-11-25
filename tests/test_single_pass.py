@@ -170,9 +170,7 @@ def test_replay_conserves_area_and_regenerates_removed_area() -> None:
     assert len(replay.snapshots) == 3
     assert len(replay.area_burned_ha) == 2
     for before, after in zip(replay.snapshots[:-1], replay.snapshots[1:], strict=True):
-        assert after["area_ha"].sum() == pytest.approx(
-            before["area_ha"].sum(), rel=1e-9
-        )
+        assert after["area_ha"].sum() == pytest.approx(before["area_ha"].sum(), rel=1e-9)
     # Independent replay of the first decade through the fire primitives: the
     # survivors age +10 and everything removed regenerates at midpoint 5.
     first_decade = fire.simulate_cohort_years(
@@ -185,9 +183,7 @@ def test_replay_conserves_area_and_regenerates_removed_area() -> None:
     first = replay.snapshots[1].set_index(["curve_id", "age"])["area_ha"]
     assert first.loc[(CURVE_ID, 75)] == pytest.approx(100.0 * live_end, rel=1e-12)
     assert first.loc[(CURVE_ID, 155)] == pytest.approx(50.0 * live_end, rel=1e-12)
-    assert first.loc[(CURVE_ID, 5)] == pytest.approx(
-        150.0 * (1.0 - live_end), rel=1e-12
-    )
+    assert first.loc[(CURVE_ID, 5)] == pytest.approx(150.0 * (1.0 - live_end), rel=1e-12)
     assert replay.area_burned_ha[0] == pytest.approx(
         150.0 * sum(year.burn_influx for year in first_decade), rel=1e-12
     )
@@ -244,9 +240,7 @@ def test_replay_regen_subcohorts_age_and_stay_exposed_to_fire() -> None:
     second = replay.snapshots[2].set_index("age")["area_ha"]
     assert second.loc[15] == pytest.approx(100.0 * 0.99**10, rel=1e-9)
     assert second.loc[5] == pytest.approx(100.0 * (1.0 - 0.99**10), rel=1e-9)
-    assert replay.area_burned_ha[1] == pytest.approx(
-        100.0 * (1.0 - 0.99**10), rel=1e-9
-    )
+    assert replay.area_burned_ha[1] == pytest.approx(100.0 * (1.0 - 0.99**10), rel=1e-9)
     assert replay.area_burned_ha[1] > replay.area_burned_ha[0]
 
 
@@ -325,22 +319,14 @@ def test_replay_regen_decade_slices_match_carried_state_simulation() -> None:
         salvage_schedule=(0.0,) * 10,
         decay_rate=0.85,
     )
-    lineage = replace(
-        lineage, live_before=fresh[9].live_after, burned_before=fresh[9].burned_after
-    )
+    lineage = replace(lineage, live_before=fresh[9].live_after, burned_before=fresh[9].burned_after)
     slice_ = single_pass._zero_harvest_decade(
         lineage, {}, horizon=20, period_length=10, decay_rate=0.85
     )
 
-    assert [year.live_after for year in slice_] == [
-        year.live_after for year in carried
-    ]
-    assert [year.burn_influx for year in slice_] == [
-        year.burn_influx for year in carried
-    ]
-    assert [year.burned_after for year in slice_] == [
-        year.burned_after for year in carried
-    ]
+    assert [year.live_after for year in slice_] == [year.live_after for year in carried]
+    assert [year.burn_influx for year in slice_] == [year.burn_influx for year in carried]
+    assert [year.burned_after for year in slice_] == [year.burned_after for year in carried]
 
 
 def test_replay_burned_stock_reset_leaves_state_and_burned_area_unchanged() -> None:
@@ -361,9 +347,7 @@ def test_replay_burned_stock_reset_leaves_state_and_burned_area_unchanged() -> N
     carried = single_pass.replay_lineage(state, **kwargs)
     reset = single_pass.replay_lineage(state, burned_stock_reset=True, **kwargs)
 
-    for carried_state, reset_state in zip(
-        carried.snapshots, reset.snapshots, strict=True
-    ):
+    for carried_state, reset_state in zip(carried.snapshots, reset.snapshots, strict=True):
         assert carried_state["area_ha"].tolist() == reset_state["area_ha"].tolist()
     assert carried.area_burned_ha == reset.area_burned_ha
     assert carried.area_salvaged_ha == reset.area_salvaged_ha
@@ -471,9 +455,7 @@ def test_replay_accepts_agent_lp_boundary_salvage_under_declining_growth() -> No
         salvage_schedule=salvages[0][:10],
         decay_rate=0.85,
     )
-    old_gate = decade1[-1].burned_after + fire.burn_influx(
-        decade1[-1].live_after, BURN_RATE
-    )
+    old_gate = decade1[-1].burned_after + fire.burn_influx(decade1[-1].live_after, BURN_RATE)
     assert salvage_year_11 > old_gate  # exactly what the pre-fix replay rejected
 
     replay = single_pass.replay_lineage(
@@ -487,9 +469,7 @@ def test_replay_accepts_agent_lp_boundary_salvage_under_declining_growth() -> No
         regeneration_age=5,
     )
 
-    assert replay.area_salvaged_ha[1] == pytest.approx(
-        100.0 * sum(salvages[0][10:20]), rel=1e-12
-    )
+    assert replay.area_salvaged_ha[1] == pytest.approx(100.0 * sum(salvages[0][10:20]), rel=1e-12)
 
 
 @pytest.mark.parametrize(
@@ -587,8 +567,7 @@ def _regen_spec(
     implemented_periods: int = 4,
 ) -> rh.RegeneratedCohortSpec:
     period_volumes = tuple(
-        volume if index == period - 1 else 0.0
-        for index in range(implemented_periods)
+        volume if index == period - 1 else 0.0 for index in range(implemented_periods)
     )
     return rh.RegeneratedCohortSpec(
         cohort_id=cohort_id,
@@ -658,9 +637,7 @@ def test_regenerated_cohort_is_inactive_outside_its_scheduled_period() -> None:
     spec = _regen_spec(period=2, area=100.0, volume=10_000.0)
     economics = Economics(subsidy_rate_per_m3=24.10)
     principal_prices, agent_prices = _regen_prices()
-    ceilings = rh.annual_ceiling_matrix(
-        {spec.cohort_id: spec.period_volumes}, 10
-    )[spec.cohort_id]
+    ceilings = rh.annual_ceiling_matrix({spec.cohort_id: spec.period_volumes}, 10)[spec.cohort_id]
 
     assert ceilings[:10] == (0.0,) * 10
     assert ceilings[10:20] == (1_000.0,) * 10
@@ -707,10 +684,7 @@ def test_regenerated_cohort_is_inactive_outside_its_scheduled_period() -> None:
         grade_clock_period=10,
         burned_stock_reset=True,
     )
-    harvests = {
-        decision.year: decision.harvest_fraction
-        for decision in agent_result.decisions
-    }
+    harvests = {decision.year: decision.harvest_fraction for decision in agent_result.decisions}
     assert all(harvests[year] == 0.0 for year in range(1, 11))
     assert all(harvests[year] == pytest.approx(0.1) for year in range(11, 21))
     assert all(harvests[year] == 0.0 for year in range(21, 41))
@@ -720,9 +694,7 @@ def test_regenerated_ceiling_binds_at_availability() -> None:
     spec = _regen_spec(period=2, area=100.0, volume=10_000.0)
     economics = Economics(subsidy_rate_per_m3=24.10)
     principal_prices, _agent_prices = _regen_prices()
-    ceiling = rh.annual_ceiling_matrix(
-        {spec.cohort_id: spec.period_volumes}, 10
-    )[spec.cohort_id]
+    ceiling = rh.annual_ceiling_matrix({spec.cohort_id: spec.period_volumes}, 10)[spec.cohort_id]
     half_ceiling = tuple(value / 2.0 for value in ceiling)
     cohort_p = single_pass._regenerated_principal_cohorts(
         [spec],
@@ -903,13 +875,11 @@ def test_principal_decade_decomposition_carries_the_offset() -> None:
         period_length=2,
     )
 
-    losses = [0.1 * 10.0 * (1.0 - 0.9**year) for year in range(4)]
+    losses = [0.1 * 10.0 * (1.0 - 0.9) for _ in range(4)]
     assert result.decadal_objective_values == pytest.approx(
         [-(losses[0] + losses[1]), -(losses[2] + losses[3])]
     )
-    assert sum(result.decadal_objective_values) == pytest.approx(
-        result.objective_value, rel=1e-9
-    )
+    assert sum(result.decadal_objective_values) == pytest.approx(result.objective_value, rel=1e-9)
 
 
 def test_principal_decade_decomposition_attributes_offer_columns() -> None:
@@ -925,13 +895,11 @@ def test_principal_decade_decomposition_attributes_offer_columns() -> None:
         period_length=2,
     )
 
-    losses = [0.1 * 10.0 * (1.0 - 0.9**year) for year in range(4)]
+    losses = [0.1 * 10.0 * (1.0 - 0.9) for _ in range(4)]
     assert result.decadal_objective_values == pytest.approx(
         [-(losses[0] + losses[1]), cohort.cashflow - losses[2]]
     )
-    assert sum(result.decadal_objective_values) == pytest.approx(
-        result.objective_value, rel=1e-9
-    )
+    assert sum(result.decadal_objective_values) == pytest.approx(result.objective_value, rel=1e-9)
 
 
 def test_principal_decade_decomposition_rejects_partial_decades() -> None:
@@ -961,9 +929,7 @@ def test_agent_decade_decomposition_rebases_to_each_decade_start() -> None:
     built.model.run()
     solution = built.model.getSolution().col_value
 
-    values = agent.decadal_objective_values(
-        built, solution, period_length=2, discount_rate=0.03
-    )
+    values = agent.decadal_objective_values(built, solution, period_length=2, discount_rate=0.03)
 
     # Independent expectation: per-decade raw cost*x sums, re-based by
     # (1+r) ** (L * k).
@@ -988,9 +954,7 @@ def test_agent_decade_decomposition_rejects_partial_decades() -> None:
     cohort = _agent_cohort("only")
 
     with pytest.raises(agent.AgentError) as excinfo:
-        agent.solve_agent(
-            [cohort], [(1.0,) * 5], horizon=5, period_length=2
-        )
+        agent.solve_agent([cohort], [(1.0,) * 5], horizon=5, period_length=2)
 
     assert excinfo.value.code == "agent_invalid_period_length"
 
@@ -1081,12 +1045,8 @@ def test_decade_records_slice_annual_arrays_and_rebase_objectives(tmp_path: Path
     assert [record.step for record in records] == [1, 2]
     assert [record.start_year for record in records] == [2025, 2035]
     assert records[0].annual_green_harvest_m3 == [float(year) for year in range(10)]
-    assert records[1].annual_green_harvest_m3 == [
-        float(year) for year in range(10, 20)
-    ]
-    assert records[0].annual_burned_harvest_m3 == [
-        float(year) / 10.0 for year in range(10)
-    ]
+    assert records[1].annual_green_harvest_m3 == [float(year) for year in range(10, 20)]
+    assert records[0].annual_burned_harvest_m3 == [float(year) / 10.0 for year in range(10)]
     assert [record.area_burned_ha for record in records] == [1.0, 2.0]
     # D8: the single WS3 solve is attributed to decade 1 only.
     assert records[0].ws3_status == "optimal"
@@ -1099,9 +1059,7 @@ def test_decade_records_slice_annual_arrays_and_rebase_objectives(tmp_path: Path
     assert [record.principal_objective_value for record in records] == [-100.0, -60.0]
     assert [record.agent_objective_value for record in records] == [200.0, 100.0]
     assert records[0].agent_objective_value_base_year == 200.0
-    assert records[1].agent_objective_value_base_year == pytest.approx(
-        100.0 * 1.03**-10
-    )
+    assert records[1].agent_objective_value_base_year == pytest.approx(100.0 * 1.03**-10)
     assert [record.principal_objective_value_base_year for record in records] == [
         -100.0,
         -60.0,
@@ -1189,9 +1147,7 @@ def test_single_pass_config_requires_period_length_multiple_of_width(
 
 def test_burned_stock_reset_only_applies_to_single_pass(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="only applies to planning_mode"):
-        _config(
-            tmp_path, planning_mode="rolling_horizon", burned_stock_reset=True
-        )
+        _config(tmp_path, planning_mode="rolling_horizon", burned_stock_reset=True)
 
 
 def test_single_pass_config_accepts_burned_stock_reset(tmp_path: Path) -> None:
@@ -1354,9 +1310,7 @@ def test_run_planning_dispatches_by_mode(
 
     monkeypatch.setattr(rh, "run_rh", fake_run_rh)
     monkeypatch.setattr(single_pass, "run_single_pass", fake_run_single_pass)
-    config = _config(
-        tmp_path, planning_mode=mode, steps=1, horizon=3, burned_stock_reset=False
-    )
+    config = _config(tmp_path, planning_mode=mode, steps=1, horizon=3, burned_stock_reset=False)
 
     result = rh.run_planning(config)
 
@@ -1438,9 +1392,7 @@ def test_cli_single_pass_run_help() -> None:
 def test_cli_single_pass_run_missing_config_fails_with_json_diagnostic(
     tmp_path: Path,
 ) -> None:
-    result = runner.invoke(
-        app, ["single-pass-run", str(tmp_path / "missing.yaml"), "--json"]
-    )
+    result = runner.invoke(app, ["single-pass-run", str(tmp_path / "missing.yaml"), "--json"])
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
@@ -1587,9 +1539,7 @@ def _comparable_record(record: RHStepRecord) -> dict:
     }
 
 
-def _assert_matching_step1(
-    single_pass_record: RHStepRecord, rh_record: RHStepRecord
-) -> None:
+def _assert_matching_step1(single_pass_record: RHStepRecord, rh_record: RHStepRecord) -> None:
     """The decade-1 record must reproduce the RH step-1 record.
 
     The LPs are bit-identical (the P8.2/P8.3 equivalence suite), so every array
@@ -1605,9 +1555,7 @@ def _assert_matching_step1(
     single_pass_fields = _comparable_record(single_pass_record)
     rh_fields = _comparable_record(rh_record)
     for field in sorted(objective_fields):
-        assert single_pass_fields.pop(field) == pytest.approx(
-            rh_fields.pop(field), rel=1e-12
-        )
+        assert single_pass_fields.pop(field) == pytest.approx(rh_fields.pop(field), rel=1e-12)
     assert single_pass_fields == rh_fields
 
 
@@ -1620,9 +1568,7 @@ def _compare_final_states(single_pass_csv: Path, rh_csv: Path) -> None:
     left = single_pass_state.sort_values(keys).reset_index(drop=True)
     right = rh_state.sort_values(keys).reset_index(drop=True)
     assert left[keys].equals(right[keys])
-    assert left["area_ha"].to_numpy() == pytest.approx(
-        right["area_ha"].to_numpy(), rel=1e-9
-    )
+    assert left["area_ha"].to_numpy() == pytest.approx(right["area_ha"].to_numpy(), rel=1e-9)
 
 
 class _StubDevelopmentType:
@@ -1639,8 +1585,7 @@ class _StubForestModel:
 
     def initialize_areas(self, reset_areas: bool = False) -> None:
         self.injected = {
-            key: dict(development_type._areas[0])
-            for key, development_type in self.dtypes.items()
+            key: dict(development_type._areas[0]) for key, development_type in self.dtypes.items()
         }
 
 
@@ -1653,9 +1598,7 @@ class _StubProblem:
 
 
 @pytest.fixture
-def synthetic_ws3(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> dict[str, Path]:
+def synthetic_ws3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     """Write synthetic boundary inputs and monkeypatch the WS3 stage.
 
     The fake WS3 stage solves nothing: ``_compile_schedule`` emits one
@@ -1757,9 +1700,7 @@ def test_oracle_single_pass_steps1_reproduces_rh_step1(
 ) -> None:
     rh_result = rh.run_rh(_oracle_config(synthetic_ws3, tmp_path, "rh"))
     single_pass_result = single_pass.run_single_pass(
-        _oracle_config(
-            synthetic_ws3, tmp_path, "sp", planning_mode="single_pass"
-        )
+        _oracle_config(synthetic_ws3, tmp_path, "sp", planning_mode="single_pass")
     )
 
     assert rh_result.status == "optimal"
@@ -1780,9 +1721,7 @@ def test_oracle_single_pass_steps1_reproduces_rh_step1(
     assert rh_record.principal_objective_value_base_year is None
     assert rh_record.agent_objective_value_base_year is None
     # Same next state (replay formula differs in float association only).
-    _compare_final_states(
-        single_pass_result.final_state_path, rh_result.final_state_path
-    )
+    _compare_final_states(single_pass_result.final_state_path, rh_result.final_state_path)
     # The run totals re-based to the base year are the same LP objectives.
     manifest = RHManifest.read_json(single_pass_result.manifest_path)
     assert manifest.planning_mode == "single_pass"
@@ -1826,9 +1765,9 @@ def test_single_pass_multi_decade_records_and_snapshots(
     final_state = pd.read_csv(result.final_state_path)
     assert final_state["area_ha"].sum() == pytest.approx(150.0, rel=1e-9)
     # The final ARE snapshot and the CSV hold the same state.
-    assert rh.read_cohort_table(
-        state_dir / "step_02.are"
-    )["area_ha"].to_numpy() == pytest.approx(final_state["area_ha"].to_numpy())
+    assert rh.read_cohort_table(state_dir / "step_02.are")["area_ha"].to_numpy() == pytest.approx(
+        final_state["area_ha"].to_numpy()
+    )
 
 
 # --- real-data oracle (opt-in integration) ---------------------------------
@@ -1838,9 +1777,7 @@ STAGE1_YIELDS_PATH = Path(
     "/srv/shared-data/gep/jupyterhub07-projects/davis/femic/external/"
     "femic-tsa29-instance/output/woodstock_tsa29_validated/woodstock_yields.csv"
 )
-CORRECTED_BRIDGE_PATH = Path(
-    os.environ.get("FRESH_SALVAGE_CORRECTED_BRIDGE", "")
-)
+CORRECTED_BRIDGE_PATH = Path(os.environ.get("FRESH_SALVAGE_CORRECTED_BRIDGE", ""))
 
 
 def _require_integration_inputs() -> None:
@@ -1880,12 +1817,8 @@ def test_real_data_oracle_single_pass_steps1_matches_rh_step1(tmp_path: Path) ->
     )
 
     assert len(rh_result.step_records) == len(single_pass_result.step_records) == 1
-    _assert_matching_step1(
-        single_pass_result.step_records[0], rh_result.step_records[0]
-    )
-    _compare_final_states(
-        single_pass_result.final_state_path, rh_result.final_state_path
-    )
+    _assert_matching_step1(single_pass_result.step_records[0], rh_result.step_records[0])
+    _compare_final_states(single_pass_result.final_state_path, rh_result.final_state_path)
 
 
 def test_real_data_single_pass_steps2_replay_smoke(tmp_path: Path) -> None:
@@ -1932,9 +1865,9 @@ def test_real_data_single_pass_steps2_replay_smoke(tmp_path: Path) -> None:
     assert final_state["area_ha"].sum() == pytest.approx(
         initial_snapshot["area_ha"].sum(), rel=1e-6
     )
-    assert rh.read_cohort_table(state_dir / "step_02.are")[
-        "area_ha"
-    ].to_numpy() == pytest.approx(final_state["area_ha"].to_numpy(), rel=1e-12)
+    assert rh.read_cohort_table(state_dir / "step_02.are")["area_ha"].to_numpy() == pytest.approx(
+        final_state["area_ha"].to_numpy(), rel=1e-12
+    )
 
 
 @pytest.mark.skipif(
@@ -1959,8 +1892,7 @@ def test_corrected_bridge_single_pass_represents_period9_regenerated_harvest(
     _require_integration_inputs()
     if not os.environ.get("FRESH_SALVAGE_CORRECTED_BRIDGE"):
         pytest.skip(
-            "set FRESH_SALVAGE_CORRECTED_BRIDGE to the corrected pre-smashed "
-            "bridge directory"
+            "set FRESH_SALVAGE_CORRECTED_BRIDGE to the corrected pre-smashed bridge directory"
         )
     if not CORRECTED_BRIDGE_PATH.is_dir():
         pytest.skip(f"corrected bridge unavailable: {CORRECTED_BRIDGE_PATH}")
@@ -1994,9 +1926,7 @@ def test_corrected_bridge_single_pass_represents_period9_regenerated_harvest(
     assert context["periods"] == [9]
     assert context["cohorts"] == 7
     assert float(context["area_ha"]) == pytest.approx(36_437.071545, rel=1e-6)
-    assert float(context["scheduled_volume_m3"]) == pytest.approx(
-        9_856_940.0569593, rel=1e-6
-    )
+    assert float(context["scheduled_volume_m3"]) == pytest.approx(9_856_940.0569593, rel=1e-6)
     assert sum(result.step_records[8].annual_green_harvest_m3) > 0.0
     initial_snapshot = rh.read_cohort_table(
         tmp_path / "sp9" / "derived" / "rh_state" / "step_00.are"

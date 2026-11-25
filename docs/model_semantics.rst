@@ -248,9 +248,10 @@ where, per cohort (all volumes m3, parsed at the boundary):
    of offer decisions.
 
 ``annual_burn_loss[c,y]``
-   The expected burned-wood loss charged against volume not yet offered by
-   year ``y``. It uses the predetermined fire influx, burned-volume retention,
-   and annual transitioned grade price.
+   The incremental expected burned-wood loss charged against volume not yet
+   offered in year ``y``. It is ``R * value * (1 - d)``, so summing it over
+   the years a cohort remains unoffered charges the cumulative decay loss
+   exactly once.
 
 The AAC ceiling (default **2,937,509 m3/yr**; AAC is the Annual Allowable
 Cut, the regulator's annual harvest ceiling) bounds annual *offered green*
@@ -499,7 +500,7 @@ burned path is seeded once at t=0. The optional
 mimicking the rolling-horizon boundary above: the agent's first-year burned
 and salvage rows drop the carried ``B[t-1]`` coefficient, and the
 principal's burned path is re-seeded from ``burned_volume_m3 * v_k / v_0``
-with its ``annual_burn_loss`` decay exponent restarting at
+with its ``annual_burn_loss`` recomputed from the re-seeded value at
 ``year mod L``. ``burned_stock_reset`` is rejected with ``planning_mode:
 rolling_horizon``.
 
